@@ -3,6 +3,7 @@ Core form filling agent that handles multiple form sections iteratively.
 """
 from typing import List, Dict, Any, Optional
 from enum import Enum, auto
+from .field import FormField
 import logging
 
 
@@ -281,6 +282,7 @@ class FormFillingAgent:
         
         # Initialize form state
         self.form_status = FormStatus.NOT_STARTED
+        self.sections: List[FormSection] = []
         self.current_section_index = 0
         self.section_statuses: Dict[str, SectionStatus] = {}
         self.form_data: Dict[str, Any] = {}
@@ -288,9 +290,16 @@ class FormFillingAgent:
         
         # Initialize section statuses
         if 'sections' in form_config:
-            for section in form_config['sections']:
-                section_id = section.get('id', f"section_{len(self.section_statuses)}")
+            for i, section_data in enumerate(form_config['sections']):
+                section_id = section_data.get('id', f"section_{i}")
                 self.section_statuses[section_id] = SectionStatus.PENDING
+                
+                # Create FormSection objects
+                section = FormSection.from_dict(section_data) if isinstance(section_data, dict) else section_data
+                self.sections.append(section)
+        
+        # Sort sections by order
+        self.sections.sort(key=lambda s: s.order)
     
     def get_current_section(self) -> Optional[Dict[str, Any]]:
         """Get the current section being processed."""
@@ -335,5 +344,364 @@ class FormFillingAgent:
             self.section_statuses[section_id] = SectionStatus.PENDING
         
         self.logger.info("Form has been reset to initial state")
+    
+    def can_process_section(self, section: FormSection) -> bool:
+        """
+        Check if a section can be processed based on its dependencies.
+        
+        Args:
+            section: The section to check
+            
+        Returns:
+            True if section can be processed, False otherwise
+        """
+        if not section.dependencies:
+            return True
+        
+        completed_sections = [
+            s.section_id for s in self.sections 
+            if self.section_statuses.get(s.section_id) == SectionStatus.COMPLETED
+        ]
+        
+        return section.is_dependencies_met(completed_sections)
+    
+    def get_next_processable_section(self) -> Optional[FormSection]:
+        """
+        Get the next section that can be processed based on dependencies and current status.
+        
+        Returns:
+            Next processable section or None if no sections are available
+        """
+        for section in self.sections:
+            section_status = self.section_statuses.get(section.section_id, SectionStatus.PENDING)
+            
+            # Skip completed or failed sections
+            if section_status in [SectionStatus.COMPLETED, SectionStatus.FAILED]:
+                continue
+            
+            # Check if section can be processed
+            if self.can_process_section(section):
+                return section
+        
+        return None
+    
+    def attempt_field_completion(self, field: Dict[str, Any], section: FormSection, available_data: Dict[str, Any] = None) -> bool:
+        """
+        Attempt to complete a field using available data or intelligent guessing.
+        
+        Args:
+            field: Field definition dictionary
+            section: The section containing this field
+            available_data: Optional dictionary of available data to use for field completion
+            
+        Returns:
+            True if field was successfully completed, False otherwise
+        """
+        field_id = field.get('id')
+        field_name = field.get('name', field_id)
+        
+        if not field_id:
+            self.logger.warning(f"Field missing ID in section {section.section_id}")
+            return False
+        
+        # Check if field is already completed
+        if field_id in section.field_data and section.field_data[field_id] is not None:
+            self.logger.debug(f"Field {field_name} already has value: {section.field_data[field_id]}")
+            return True
+        
+        # Try to use available data
+        if available_data:
+            # Direct field ID match
+            if field_id in available_data:
+                value = available_data[field_id]
+                if section.set_field_value(field_id, value):
+                    self.logger.info(f"Set field {field_name} from available data: {value}")
+                    return True
+            
+            # Try field name match
+            if field_name.lower() in available_data:
+                value = available_data[field_name.lower()]
+                if section.set_field_value(field_id, value):
+                    self.logger.info(f"Set field {field_name} from available data by name: {value}")
+                    return True
+            
+            # Try intelligent matching based on field type and common patterns
+            field_type = field.get('type', 'text')
+            value = self._intelligent_field_matching(field, available_data)
+            if value is not None and section.set_field_value(field_id, value):
+                self.logger.info(f"Set field {field_name} through intelligent matching: {value}")
+                return True
+        
+        # Use default value if available
+        default_value = field.get('default_value')
+        if default_value is not None:
+            if section.set_field_value(field_id, default_value):
+                self.logger.info(f"Set field {field_name} to default value: {default_value}")
+                return True
+        
+        # For optional fields, we can consider them "completed" even if empty
+        if not field.get('required', False):
+            self.logger.debug(f"Optional field {field_name} left empty")
+            return True
+        
+        self.logger.debug(f"Could not complete required field {field_name}")
+        return False
+    
+    def _intelligent_field_matching(self, field: Dict[str, Any], available_data: Dict[str, Any]) -> Any:
+        """
+        Attempt intelligent matching of field values based on field type and common patterns.
+        
+        Args:
+            field: Field definition
+            available_data: Available data dictionary
+            
+        Returns:
+            Matched value or None if no match found
+        """
+        field_type = field.get('type', 'text')
+        field_name = field.get('name', '').lower()
+        field_id = field.get('id', '').lower()
+        
+        # Common field name patterns
+        patterns = {
+            'email': ['email', 'email_address', 'e_mail', 'mail'],
+            'phone': ['phone', 'phone_number', 'telephone', 'mobile', 'cell'],
+            'name': ['name', 'full_name', 'first_name', 'last_name', 'fname', 'lname'],
+            'address': ['address', 'street', 'street_address', 'addr'],
+            'city': ['city', 'town'],
+            'state': ['state', 'province', 'region'],
+            'zip': ['zip', 'zipcode', 'postal_code', 'postcode'],
+            'country': ['country', 'nation'],
+            'date': ['date', 'birth_date', 'birthday', 'dob'],
+            'age': ['age', 'years_old'],
+            'company': ['company', 'organization', 'employer', 'business'],
+            'title': ['title', 'job_title', 'position', 'role']
+        }
+        
+        # Try to match based on field type
+        if field_type == 'email':
+            for key, value in available_data.items():
+                if any(pattern in key.lower() for pattern in patterns['email']):
+                    return value
+                if '@' in str(value) and '.' in str(value):
+                    return value
+        
+        elif field_type == 'phone':
+            for key, value in available_data.items():
+                if any(pattern in key.lower() for pattern in patterns['phone']):
+                    return value
+                # Check if value looks like a phone number
+                value_str = str(value).replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+                if value_str.isdigit() and len(value_str) >= 10:
+                    return value
+        
+        # Try to match based on field name patterns
+        for pattern_type, pattern_list in patterns.items():
+            if any(pattern in field_name or pattern in field_id for pattern in pattern_list):
+                for key, value in available_data.items():
+                    if any(pattern in key.lower() for pattern in pattern_list):
+                        return value
+        
+        return None
+    
+    def process_current_section(self, available_data: Dict[str, Any] = None) -> bool:
+        """
+        Process the current section by attempting to fill its fields.
+        
+        Args:
+            available_data: Optional dictionary of available data to use for field completion
+            
+        Returns:
+            True if section was successfully processed, False otherwise
+        """
+        section = self.get_next_processable_section()
+        if not section:
+            self.logger.info("No processable sections available")
+            return False
+        
+        self.logger.info(f"Processing section: {section.name} (ID: {section.section_id})")
+        
+        # Update section status
+        self.section_statuses[section.section_id] = SectionStatus.IN_PROGRESS
+        section.status = SectionStatus.IN_PROGRESS
+        
+        # Process each field in the section
+        completed_fields = 0
+        total_fields = len(section.fields)
+        
+        for field in section.fields:
+            try:
+                if self.attempt_field_completion(field, section, available_data):
+                    completed_fields += 1
+                else:
+                    field_name = field.get('name', field.get('id', 'unknown'))
+                    if field.get('required', False):
+                        self.logger.warning(f"Failed to complete required field: {field_name}")
+            except Exception as e:
+                field_name = field.get('name', field.get('id', 'unknown'))
+                self.logger.error(f"Error processing field {field_name}: {str(e)}")
+        
+        # Check if section is completed
+        if section.validate_section():
+            section.mark_completed(f"Completed {completed_fields}/{total_fields} fields")
+            self.section_statuses[section.section_id] = SectionStatus.COMPLETED
+            self.logger.info(f"Section {section.name} completed successfully")
+            
+            # Update form data
+            self.form_data.update(section.field_data)
+            
+            # Add to completion history
+            self.completion_history.append({
+                'section_id': section.section_id,
+                'section_name': section.name,
+                'completed_at': self._get_timestamp(),
+                'fields_completed': completed_fields,
+                'total_fields': total_fields,
+                'completion_percentage': section.get_completion_percentage()
+            })
+            
+            return True
+        else:
+            # Section not fully completed
+            required_fields = section.get_required_fields()
+            missing_required = [
+                field.get('name', field.get('id')) 
+                for field in required_fields 
+                if field.get('id') not in section.field_data or section.field_data[field.get('id')] is None
+            ]
+            
+            if missing_required:
+                self.logger.warning(f"Section {section.name} missing required fields: {', '.join(missing_required)}")
+                section.status = SectionStatus.FAILED
+                self.section_statuses[section.section_id] = SectionStatus.FAILED
+            else:
+                # Has validation errors but no missing required fields
+                self.logger.info(f"Section {section.name} has validation errors: {section.validation_errors}")
+                section.status = SectionStatus.FAILED
+                self.section_statuses[section.section_id] = SectionStatus.FAILED
+            
+            return False
+    
+    def _get_timestamp(self) -> str:
+        """Get current timestamp as string."""
+        from datetime import datetime
+        return datetime.now().isoformat()
+    
+    def run_completion_cycle(self, available_data: Dict[str, Any] = None, max_iterations: int = 10) -> Dict[str, Any]:
+        """
+        Run the main iterative completion cycle that processes sections sequentially.
+        
+        Args:
+            available_data: Optional dictionary of available data to use for field completion
+            max_iterations: Maximum number of iterations to prevent infinite loops
+            
+        Returns:
+            Dictionary containing completion results and status
+        """
+        self.logger.info("Starting form completion cycle")
+        self.form_status = FormStatus.IN_PROGRESS
+        
+        iteration = 0
+        sections_processed_this_cycle = 0
+        
+        while iteration < max_iterations:
+            iteration += 1
+            self.logger.debug(f"Completion cycle iteration {iteration}")
+            
+            # Try to process the next available section
+            if self.process_current_section(available_data):
+                sections_processed_this_cycle += 1
+            else:
+                # No section was processed, check if we're done or stuck
+                next_section = self.get_next_processable_section()
+                if not next_section:
+                    # No more sections to process
+                    break
+                else:
+                    # We have sections but couldn't process them
+                    self.logger.warning(f"Could not process section {next_section.name}, may be missing required data")
+                    break
+        
+        # Determine final form status
+        completed_sections = sum(1 for status in self.section_statuses.values() 
+                               if status == SectionStatus.COMPLETED)
+        total_sections = len(self.sections)
+        required_sections = sum(1 for section in self.sections if section.required)
+        completed_required = sum(1 for section in self.sections 
+                               if section.required and self.section_statuses.get(section.section_id) == SectionStatus.COMPLETED)
+        
+        if completed_required == required_sections:
+            self.form_status = FormStatus.COMPLETED
+            self.logger.info("Form completion cycle finished successfully")
+        elif sections_processed_this_cycle == 0:
+            self.form_status = FormStatus.FAILED
+            self.logger.warning("Form completion cycle failed - no progress made")
+        else:
+            self.form_status = FormStatus.IN_PROGRESS
+            self.logger.info("Form completion cycle made partial progress")
+        
+        # Return completion results
+        return {
+            'form_status': self.form_status.value,
+            'iterations': iteration,
+            'sections_processed': sections_processed_this_cycle,
+            'completed_sections': completed_sections,
+            'total_sections': total_sections,
+            'required_sections': required_sections,
+            'completed_required_sections': completed_required,
+            'progress_percentage': (completed_sections / total_sections * 100) if total_sections > 0 else 0,
+            'section_statuses': {k: v.value for k, v in self.section_statuses.items()},
+            'completion_history': self.completion_history.copy(),
+            'form_data': self.form_data.copy(),
+            'validation_errors': self._get_all_validation_errors()
+        }
+    
+    def _get_all_validation_errors(self) -> Dict[str, List[str]]:
+        """Get all validation errors from all sections."""
+        errors = {}
+        for section in self.sections:
+            if section.validation_errors:
+                errors[section.section_id] = section.validation_errors.copy()
+        return errors
+    
+    def get_incomplete_sections(self) -> List[FormSection]:
+        """Get list of sections that are not yet completed."""
+        return [
+            section for section in self.sections
+            if self.section_statuses.get(section.section_id) != SectionStatus.COMPLETED
+        ]
+    
+    def get_failed_sections(self) -> List[FormSection]:
+        """Get list of sections that failed to complete."""
+        return [
+            section for section in self.sections
+            if self.section_statuses.get(section.section_id) == SectionStatus.FAILED
+        ]
+    
+    def retry_failed_sections(self, available_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Retry processing failed sections with potentially new data.
+        
+        Args:
+            available_data: Optional dictionary of available data to use for field completion
+            
+        Returns:
+            Dictionary containing retry results
+        """
+        failed_sections = self.get_failed_sections()
+        if not failed_sections:
+            return {'message': 'No failed sections to retry', 'sections_retried': 0}
+        
+        self.logger.info(f"Retrying {len(failed_sections)} failed sections")
+        
+        # Reset failed sections to pending
+        for section in failed_sections:
+            section.status = SectionStatus.PENDING
+            self.section_statuses[section.section_id] = SectionStatus.PENDING
+            section.validation_errors.clear()
+        
+        # Run completion cycle again
+        return self.run_completion_cycle(available_data)
+
 
 
