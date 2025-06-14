@@ -1,0 +1,256 @@
+{
+  "id": "job_application_form",
+  "name": "Job Application Form",
+  "description": "A comprehensive job application form with multiple sections and validation rules",
+  "version": "1.0",
+  "sections": [
+    {
+      "id": "personal_details",
+      "name": "Personal Details",
+      "description": "Basic personal information section",
+      "instructions": "Please provide your personal information. All fields marked with * are required.",
+      "fields": [
+        {
+          "id": "full_name",
+          "name": "Full Name",
+          "type": "text",
+          "required": true,
+          "placeholder": "Enter your full name",
+          "validation_rules": {
+            "min_length": 2,
+            "max_length": 100
+          }
+        },
+        {
+          "id": "email",
+          "name": "Email Address",
+          "type": "email",
+          "required": true,
+          "placeholder": "your.email@example.com"
+        },
+        {
+          "id": "phone",
+          "name": "Phone Number",
+          "type": "phone",
+          "required": true,
+          "placeholder": "+1 (555) 123-4567"
+        },
+        {
+          "id": "date_of_birth",
+          "name": "Date of Birth",
+          "type": "date",
+          "required": false
+        },
+        {
+          "id": "gender",
+          "name": "Gender",
+          "type": "select",
+          "required": false,
+          "options": ["Male", "Female", "Other", "Prefer not to say"]
+        }
+      ],
+      "required": true,
+      "order": 1
+    },
+    {
+      "id": "address_information",
+      "name": "Address Information",
+      "instructions": "Please provide your current address details",
+      "fields": [
+        {
+          "id": "street_address",
+          "name": "Street Address",
+          "type": "text",
+          "required": true,
+          "placeholder": "123 Main Street"
+        },
+        {
+          "id": "city",
+          "name": "City",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "state_province",
+          "name": "State/Province",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "postal_code",
+          "name": "Postal Code",
+          "type": "text",
+          "required": true,
+          "validation_rules": {
+            "pattern": "^[0-9]{5}(-[0-9]{4})?$"
+          }
+        },
+        {
+          "id": "country",
+          "name": "Country",
+          "type": "select",
+          "required": true,
+          "default_value": "United States",
+          "options": ["United States", "Canada", "United Kingdom", "Australia", "Other"]
+        }
+      ],
+      "dependencies": ["personal_details"],
+      "required": true,
+      "order": 2
+    },
+    {
+      "id": "employment_history",
+      "name": "Employment History",
+      "instructions": "Please provide details about your previous employment. Include your most recent positions.",
+      "fields": [
+        {
+          "id": "current_employer",
+          "name": "Current/Most Recent Employer",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "current_position",
+          "name": "Current/Most Recent Position",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "employment_start_date",
+          "name": "Start Date",
+          "type": "date",
+          "required": true
+        },
+        {
+          "id": "employment_end_date",
+          "name": "End Date",
+          "type": "date",
+          "required": false,
+          "description": "Leave blank if currently employed"
+        },
+        {
+          "id": "job_responsibilities",
+          "name": "Key Responsibilities",
+          "type": "textarea",
+          "required": true,
+          "placeholder": "Describe your main responsibilities and achievements...",
+          "validation_rules": {
+            "min_length": 50,
+            "max_length": 1000
+          }
+        },
+        {
+          "id": "salary_range",
+          "name": "Salary Range",
+          "type": "select",
+          "required": false,
+          "options": ["Under $30,000", "$30,000 - $50,000", "$50,000 - $75,000", "$75,000 - $100,000", "Over $100,000", "Prefer not to say"]
+        }
+      ],
+      "dependencies": ["personal_details", "address_information"],
+      "required": true,
+      "order": 3
+    },
+    {
+      "id": "education_background",
+      "name": "Education Background",
+      "instructions": "Please provide information about your educational background",
+      "fields": [
+        {
+          "id": "highest_degree",
+          "name": "Highest Degree",
+          "type": "select",
+          "required": true,
+          "options": ["High School", "Associate Degree", "Bachelor's Degree", "Master's Degree", "Doctoral Degree", "Other"]
+        },
+        {
+          "id": "field_of_study",
+          "name": "Field of Study",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "institution_name",
+          "name": "Institution Name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "graduation_year",
+          "name": "Graduation Year",
+          "type": "number",
+          "required": true,
+          "validation_rules": {
+            "min_value": 1950,
+            "max_value": 2030
+          }
+        },
+        {
+          "id": "gpa",
+          "name": "GPA",
+          "type": "number",
+          "required": false,
+          "validation_rules": {
+            "min_value": 0.0,
+            "max_value": 4.0
+          }
+        }
+      ],
+      "dependencies": ["personal_details"],
+      "required": true,
+      "order": 4
+    },
+    {
+      "id": "additional_information",
+      "name": "Additional Information",
+      "instructions": "Optional additional information and documents",
+      "fields": [
+        {
+          "id": "cover_letter",
+          "name": "Cover Letter",
+          "type": "textarea",
+          "required": false,
+          "placeholder": "Write a brief cover letter explaining why you're interested in this position...",
+          "validation_rules": {
+            "max_length": 2000
+          }
+        },
+        {
+          "id": "resume_file",
+          "name": "Resume/CV",
+          "type": "file",
+          "required": true,
+          "description": "Please upload your resume in PDF format"
+        },
+        {
+          "id": "portfolio_url",
+          "name": "Portfolio URL",
+          "type": "text",
+          "required": false,
+          "placeholder": "https://your-portfolio.com"
+        },
+        {
+          "id": "available_start_date",
+          "name": "Available Start Date",
+          "type": "date",
+          "required": true
+        },
+        {
+          "id": "willing_to_relocate",
+          "name": "Willing to Relocate",
+          "type": "radio",
+          "required": true,
+          "options": ["Yes", "No", "Depends on location"]
+        }
+      ],
+      "dependencies": ["employment_history", "education_background"],
+      "required": false,
+      "order": 5
+    }
+  ],
+  "metadata": {
+    "created_by": "HR Department",
+    "last_updated": "2024-01-15",
+    "version_notes": "Added validation rules and improved field descriptions"
+  }
+}
