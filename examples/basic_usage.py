@@ -74,7 +74,7 @@ def main():
         logger.info(f"Overall progress: {results['completion_percentage']:.1f}%")
         
         # Display section-by-section results
-        logger.info("
+        logger.info("\nSection Results:")
         for section_id, status in results['section_statuses'].items():
             section = agent.get_section_by_id(section_id)
             logger.info(f"  {section.name}: {status}")
@@ -90,4 +90,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
