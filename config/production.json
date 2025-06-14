@@ -1,0 +1,36 @@
+{
+  "agent_endpoints": {
+    "simple_agent": "https://agents.company.com/simple",
+    "math_agent": "https://agents.company.com/math",
+    "text_agent": "https://agents.company.com/text",
+    "data_agent": "https://agents.company.com/data",
+    "analysis_agent": "https://agents.company.com/analysis"
+  },
+  "orchestrator_settings": {
+    "max_concurrent_agents": 20,
+    "agent_timeout_seconds": 600,
+    "status_check_interval_seconds": 5,
+    "max_iterations": 200,
+    "enable_streaming": false
+  },
+  "logging": {
+    "level": "WARNING",
+    "file": "/var/log/orchestrator/orchestrator.log",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  },
+  "remote_client": {
+    "timeout_seconds": 60,
+    "max_retries": 5,
+    "retry_delay_seconds": 2,
+    "backoff_factor": 2.5
+  },
+  "ui": {
+    "show_emojis": false,
+    "show_timestamps": true,
+    "interactive_prompt": "Input: ",
+    "agent_prefix": "Orchestrator: "
+  },
+  "version": "1.0.0",
+  "description": "Production configuration for LangGraph Orchestrator Agent with enterprise settings"
+}
+
