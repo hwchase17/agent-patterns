@@ -1,0 +1,36 @@
+{
+  "agent_endpoints": {
+    "simple_agent": "http://localhost:8001",
+    "math_agent": "http://localhost:8002", 
+    "text_agent": "http://localhost:8003",
+    "data_agent": "http://localhost:8004",
+    "analysis_agent": "http://localhost:8005"
+  },
+  "orchestrator_settings": {
+    "max_concurrent_agents": 10,
+    "agent_timeout_seconds": 300,
+    "status_check_interval_seconds": 2,
+    "max_iterations": 100,
+    "enable_streaming": true
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "orchestrator.log",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  },
+  "remote_client": {
+    "timeout_seconds": 30,
+    "max_retries": 3,
+    "retry_delay_seconds": 1,
+    "backoff_factor": 2.0
+  },
+  "ui": {
+    "show_emojis": true,
+    "show_timestamps": false,
+    "interactive_prompt": "You: ",
+    "agent_prefix": "🤖 Orchestrator: "
+  },
+  "version": "1.0.0",
+  "description": "Default configuration for LangGraph Orchestrator Agent"
+}
+
