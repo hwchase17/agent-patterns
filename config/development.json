@@ -1,0 +1,36 @@
+{
+  "agent_endpoints": {
+    "simple_agent": "http://localhost:8001",
+    "math_agent": "http://localhost:8002",
+    "text_agent": "http://localhost:8003",
+    "debug_agent": "http://localhost:8004",
+    "test_agent": "http://localhost:8005"
+  },
+  "orchestrator_settings": {
+    "max_concurrent_agents": 5,
+    "agent_timeout_seconds": 120,
+    "status_check_interval_seconds": 1,
+    "max_iterations": 50,
+    "enable_streaming": true
+  },
+  "logging": {
+    "level": "DEBUG",
+    "file": "orchestrator_dev.log",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
+  },
+  "remote_client": {
+    "timeout_seconds": 10,
+    "max_retries": 2,
+    "retry_delay_seconds": 0.5,
+    "backoff_factor": 1.5
+  },
+  "ui": {
+    "show_emojis": true,
+    "show_timestamps": true,
+    "interactive_prompt": "Dev> ",
+    "agent_prefix": "🔧 Dev-Orchestrator: "
+  },
+  "version": "1.0.0-dev",
+  "description": "Development configuration for LangGraph Orchestrator Agent with debug settings"
+}
+
