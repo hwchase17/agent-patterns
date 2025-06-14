@@ -1,0 +1,58 @@
+id: sample_form
+name: Sample Registration Form
+description: A sample multi-section registration form
+version: '1.0'
+sections:
+  - id: personal_info
+    name: Personal Information
+    instructions: Fill out your basic personal information
+    fields:
+      - id: first_name
+        name: First Name
+        type: text
+        required: true
+      - id: last_name
+        name: Last Name
+        type: text
+        required: true
+      - id: email
+        name: Email Address
+        type: email
+        required: true
+      - id: phone
+        name: Phone Number
+        type: phone
+        required: false
+    required: true
+    order: 1
+  - id: address_info
+    name: Address Information
+    instructions: Provide your current address details
+    fields:
+      - id: street
+        name: Street Address
+        type: text
+        required: true
+      - id: city
+        name: City
+        type: text
+        required: true
+      - id: state
+        name: State
+        type: select
+        required: true
+        options:
+          - CA
+          - NY
+          - TX
+          - FL
+          - Other
+      - id: zip_code
+        name: ZIP Code
+        type: text
+        required: true
+    dependencies:
+      - personal_info
+    required: true
+    order: 2
+metadata: {}
