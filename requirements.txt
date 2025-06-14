@@ -1,0 +1,9 @@
+# Core LangGraph and LangChain dependencies
+langgraph>=0.4.8
+langchain>=0.3.25
+langchain-core>=0.3.63
+
+# LLM providers
+openai>=1.82.1
+anthropic>=0.52.1
+
