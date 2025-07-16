@@ -229,6 +229,10 @@ def main():
     if "show_feedback" not in st.session_state:
         st.session_state.show_feedback = False
     
+    # Initialize current assistant ID
+    if "current_assistant_id" not in st.session_state:
+        st.session_state.current_assistant_id = "agent"
+    
     # Initialize client
     client = initialize_client()
     if not client:
@@ -236,6 +240,16 @@ def main():
     
     # Configuration section
     st.header("⚙️ Configuration")
+    
+    # Display current assistant information
+    with st.expander("📋 Current Assistant Info", expanded=False):
+        if st.button("🔄 Refresh Assistant Info"):
+            config_info = get_assistant_configuration(client, st.session_state.current_assistant_id)
+            if config_info:
+                st.json(config_info)
+            else:
+                st.warning("Could not retrieve assistant configuration")
+    
     
     # System prompt configuration
     default_prompt = "You are a helpful AI assistant. Be concise and helpful in your responses."
@@ -270,7 +284,7 @@ def main():
             
             # Stream agent response
             with st.spinner("Agent is thinking..."):
-                messages, response = stream_agent_response(client, user_input, system_prompt)
+                messages, response = stream_agent_response(client, user_input, system_prompt, st.session_state.current_assistant_id)
                 st.session_state.messages = messages
                 st.session_state.last_response = response
                 st.session_state.show_feedback = True
@@ -293,15 +307,25 @@ def main():
         with col1:
             if st.button("📤 Submit Feedback & Update Config"):
                 if feedback.strip():
-                    # Update system prompt based on feedback
-                    updated_prompt = update_system_prompt_based_on_feedback(
-                        st.session_state.system_prompt, feedback
-                    )
-                    st.session_state.system_prompt = updated_prompt
-                    
-                    st.success("✅ Configuration updated based on your feedback!")
-                    st.info(f"**Updated System Prompt:** {updated_prompt}")
-                    
+                    with st.spinner("Updating assistant configuration..."):
+                        # Use the LangGraph Platform API to update configuration
+                        updated_prompt, new_assistant_id = manage_feedback_workflow(
+                            client, 
+                            st.session_state.current_assistant_id, 
+                            feedback, 
+                            st.session_state.system_prompt
+                        )
+                        
+                        if updated_prompt and new_assistant_id:
+                            # Update session state with new configuration
+                            st.session_state.system_prompt = updated_prompt
+                            st.session_state.current_assistant_id = new_assistant_id
+                            
+                            st.success("✅ Assistant configuration updated via LangGraph Platform!")
+                            st.info(f"**New Assistant ID:** {new_assistant_id}")
+                            st.info(f"**Updated System Prompt:** {updated_prompt}")
+                        else:
+                            st.error("Failed to update assistant configuration. Using local update as fallback.")
                     # Show rerun option
                     st.session_state.show_rerun = True
                 else:
@@ -320,9 +344,10 @@ def main():
                         # Stream agent response with updated config
                         with st.spinner("Agent is thinking with updated configuration..."):
                             messages, response = stream_agent_response(
-                                client, 
+                                client,
                                 st.session_state.last_user_input, 
-                                st.session_state.system_prompt
+                                st.session_state.system_prompt,
+                                st.session_state.current_assistant_id
                             )
                             st.session_state.messages = messages
                             st.session_state.last_response = response
@@ -357,5 +382,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
