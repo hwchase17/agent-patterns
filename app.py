@@ -5,6 +5,8 @@ Streamlit app for LangGraph agent with feedback loop and configuration updates.
 import streamlit as st
 import time
 from typing import Dict, Any, List
+import requests
+import json
 from langgraph_sdk import get_sync_client
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -26,6 +28,96 @@ def initialize_client():
         st.error(f"Failed to connect to LangGraph server: {e}")
         st.error("Make sure to run 'langgraph dev' in your terminal first!")
         return None
+
+
+def get_assistant_configuration(client, assistant_id: str = "agent") -> Dict[str, Any]:
+    """
+    Retrieve the current assistant configuration from LangGraph Platform.
+    """
+    try:
+        # Use the client's HTTP client to make API calls
+        response = client.assistants.get(assistant_id)
+        return {
+            "assistant_id": response.assistant_id,
+            "graph_id": response.graph_id,
+            "config": response.config,
+            "metadata": response.metadata,
+            "version": response.version
+        }
+    except Exception as e:
+        st.error(f"Failed to retrieve assistant configuration: {e}")
+        return {}
+
+
+def create_assistant_version(client, assistant_id: str, updated_config: Dict[str, Any]) -> str:
+    """
+    Create a new version of the assistant with updated configuration.
+    Returns the new version ID or None if failed.
+    """
+    try:
+        # Create a new assistant version with updated configuration
+        response = client.assistants.create(
+            graph_id="agent",  # The graph ID from langgraph.json
+            config=updated_config,
+            metadata={"updated_via": "feedback_loop", "timestamp": time.time()}
+        )
+        return response.assistant_id
+    except Exception as e:
+        st.error(f"Failed to create new assistant version: {e}")
+        return None
+
+
+def update_assistant_configuration(client, assistant_id: str, system_prompt: str) -> str:
+    """
+    Update assistant configuration with new system prompt by creating a new version.
+    Returns the new assistant ID or None if failed.
+    """
+    try:
+        # Get current configuration
+        current_config = get_assistant_configuration(client, assistant_id)
+        
+        if not current_config:
+            st.error("Could not retrieve current assistant configuration")
+            return None
+        
+        # Update the configuration with new system prompt
+        updated_config = current_config.get("config", {}).copy()
+        if "configurable" not in updated_config:
+            updated_config["configurable"] = {}
+        updated_config["configurable"]["system_prompt"] = system_prompt
+        
+        # Create new assistant version
+        new_assistant_id = create_assistant_version(client, assistant_id, updated_config)
+        
+        if new_assistant_id:
+            st.success(f"✅ Created new assistant version: {new_assistant_id}")
+            return new_assistant_id
+        else:
+            st.error("Failed to create new assistant version")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error updating assistant configuration: {e}")
+        return None
+
+
+def manage_feedback_workflow(client, assistant_id: str, feedback: str, current_prompt: str) -> tuple[str, str]:
+    """
+    Manage the complete feedback-to-configuration update workflow.
+    Returns (updated_prompt, new_assistant_id) or (None, None) if failed.
+    """
+    try:
+        # Update system prompt based on feedback
+        updated_prompt = update_system_prompt_based_on_feedback(current_prompt, feedback)
+        
+        # Create new assistant version with updated configuration
+        new_assistant_id = update_assistant_configuration(client, assistant_id, updated_prompt)
+        
+        return updated_prompt, new_assistant_id
+        
+    except Exception as e:
+        st.error(f"Error in feedback workflow: {e}")
+        return None, None
 
 
 def stream_agent_response(client, user_input: str, system_prompt: str):
@@ -265,4 +357,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
