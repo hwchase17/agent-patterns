@@ -120,7 +120,7 @@ def manage_feedback_workflow(client, assistant_id: str, feedback: str, current_p
         return None, None
 
 
-def stream_agent_response(client, user_input: str, system_prompt: str):
+def stream_agent_response(client, user_input: str, system_prompt: str, assistant_id: str = "agent"):
     """Stream the agent response and return the complete conversation."""
     messages = []
     response_container = st.empty()
@@ -142,7 +142,7 @@ def stream_agent_response(client, user_input: str, system_prompt: str):
         # Stream the agent execution
         for chunk in client.runs.stream(
             None,  # Threadless run
-            "agent",  # Assistant ID from langgraph.json
+            assistant_id,  # Use the specific assistant ID
             input=agent_input,
             config=config,
             stream_mode="messages"
@@ -382,6 +382,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
