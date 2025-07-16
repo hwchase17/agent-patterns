@@ -1,0 +1,388 @@
+"""
+Streamlit app for LangGraph agent with feedback loop and configuration updates.
+"""
+
+import streamlit as st
+import time
+from typing import Dict, Any, List
+import requests
+import json
+from langgraph_sdk import get_sync_client
+from langchain_core.messages import HumanMessage, AIMessage
+
+
+# Configure Streamlit page
+st.set_page_config(
+    page_title="LangGraph Agent with Feedback Loop",
+    page_icon="🤖",
+    layout="wide"
+)
+
+
+def initialize_client():
+    """Initialize the LangGraph SDK client."""
+    try:
+        client = get_sync_client(url="http://localhost:2024")
+        return client
+    except Exception as e:
+        st.error(f"Failed to connect to LangGraph server: {e}")
+        st.error("Make sure to run 'langgraph dev' in your terminal first!")
+        return None
+
+
+def get_assistant_configuration(client, assistant_id: str = "agent") -> Dict[str, Any]:
+    """
+    Retrieve the current assistant configuration from LangGraph Platform.
+    """
+    try:
+        # Use the client's HTTP client to make API calls
+        response = client.assistants.get(assistant_id)
+        return {
+            "assistant_id": response.assistant_id,
+            "graph_id": response.graph_id,
+            "config": response.config,
+            "metadata": response.metadata,
+            "version": response.version
+        }
+    except Exception as e:
+        st.error(f"Failed to retrieve assistant configuration: {e}")
+        return {}
+
+
+def create_assistant_version(client, assistant_id: str, updated_config: Dict[str, Any]) -> str:
+    """
+    Create a new version of the assistant with updated configuration.
+    Returns the new version ID or None if failed.
+    """
+    try:
+        # Create a new assistant version with updated configuration
+        response = client.assistants.create(
+            graph_id="agent",  # The graph ID from langgraph.json
+            config=updated_config,
+            metadata={"updated_via": "feedback_loop", "timestamp": time.time()}
+        )
+        return response.assistant_id
+    except Exception as e:
+        st.error(f"Failed to create new assistant version: {e}")
+        return None
+
+
+def update_assistant_configuration(client, assistant_id: str, system_prompt: str) -> str:
+    """
+    Update assistant configuration with new system prompt by creating a new version.
+    Returns the new assistant ID or None if failed.
+    """
+    try:
+        # Get current configuration
+        current_config = get_assistant_configuration(client, assistant_id)
+        
+        if not current_config:
+            st.error("Could not retrieve current assistant configuration")
+            return None
+        
+        # Update the configuration with new system prompt
+        updated_config = current_config.get("config", {}).copy()
+        if "configurable" not in updated_config:
+            updated_config["configurable"] = {}
+        updated_config["configurable"]["system_prompt"] = system_prompt
+        
+        # Create new assistant version
+        new_assistant_id = create_assistant_version(client, assistant_id, updated_config)
+        
+        if new_assistant_id:
+            st.success(f"✅ Created new assistant version: {new_assistant_id}")
+            return new_assistant_id
+        else:
+            st.error("Failed to create new assistant version")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error updating assistant configuration: {e}")
+        return None
+
+
+def manage_feedback_workflow(client, assistant_id: str, feedback: str, current_prompt: str) -> tuple[str, str]:
+    """
+    Manage the complete feedback-to-configuration update workflow.
+    Returns (updated_prompt, new_assistant_id) or (None, None) if failed.
+    """
+    try:
+        # Update system prompt based on feedback
+        updated_prompt = update_system_prompt_based_on_feedback(current_prompt, feedback)
+        
+        # Create new assistant version with updated configuration
+        new_assistant_id = update_assistant_configuration(client, assistant_id, updated_prompt)
+        
+        return updated_prompt, new_assistant_id
+        
+    except Exception as e:
+        st.error(f"Error in feedback workflow: {e}")
+        return None, None
+
+
+def stream_agent_response(client, user_input: str, system_prompt: str, assistant_id: str = "agent"):
+    """Stream the agent response and return the complete conversation."""
+    messages = []
+    response_container = st.empty()
+    current_response = ""
+    
+    try:
+        # Create the input for the agent
+        agent_input = {
+            "messages": [{"role": "human", "content": user_input}]
+        }
+        
+        # Configuration with system prompt
+        config = {
+            "configurable": {
+                "system_prompt": system_prompt
+            }
+        }
+        
+        # Stream the agent execution
+        for chunk in client.runs.stream(
+            None,  # Threadless run
+            assistant_id,  # Use the specific assistant ID
+            input=agent_input,
+            config=config,
+            stream_mode="messages"
+        ):
+            if chunk.event == "messages/partial":
+                # Handle partial message updates
+                if chunk.data and len(chunk.data) > 0:
+                    message = chunk.data[-1]  # Get the latest message
+                    if hasattr(message, 'content') and message.content:
+                        current_response = message.content
+                        response_container.markdown(f"**Assistant:** {current_response}")
+            
+            elif chunk.event == "messages/complete":
+                # Handle complete messages
+                if chunk.data and len(chunk.data) > 0:
+                    for message in chunk.data:
+                        if hasattr(message, 'content') and message.content:
+                            if hasattr(message, 'type') and message.type == "ai":
+                                current_response = message.content
+                                messages.append({"role": "assistant", "content": message.content})
+                            elif hasattr(message, 'type') and message.type == "human":
+                                messages.append({"role": "user", "content": message.content})
+        
+        # Final update with complete response
+        if current_response:
+            response_container.markdown(f"**Assistant:** {current_response}")
+            if not any(msg.get("role") == "assistant" for msg in messages):
+                messages.append({"role": "assistant", "content": current_response})
+        
+        return messages, current_response
+        
+    except Exception as e:
+        st.error(f"Error during agent execution: {e}")
+        return [], ""
+
+
+def update_system_prompt_based_on_feedback(current_prompt: str, feedback: str) -> str:
+    """
+    Simple logic to update system prompt based on user feedback.
+    In a real application, this could use an LLM to intelligently modify the prompt.
+    """
+    feedback_lower = feedback.lower()
+    
+    # Simple keyword-based prompt modifications
+    if "more detailed" in feedback_lower or "more verbose" in feedback_lower:
+        if "detailed" not in current_prompt.lower():
+            return current_prompt + " Provide detailed and comprehensive responses."
+    
+    elif "shorter" in feedback_lower or "concise" in feedback_lower or "brief" in feedback_lower:
+        if "concise" not in current_prompt.lower():
+            return current_prompt + " Keep responses concise and to the point."
+    
+    elif "friendly" in feedback_lower or "casual" in feedback_lower:
+        if "friendly" not in current_prompt.lower():
+            return current_prompt + " Use a friendly and casual tone."
+    
+    elif "formal" in feedback_lower or "professional" in feedback_lower:
+        if "professional" not in current_prompt.lower():
+            return current_prompt + " Maintain a professional and formal tone."
+    
+    elif "creative" in feedback_lower:
+        if "creative" not in current_prompt.lower():
+            return current_prompt + " Be creative and think outside the box."
+    
+    else:
+        # Generic improvement based on feedback
+        return current_prompt + f" Note: User feedback - {feedback}"
+    
+    return current_prompt
+
+
+def main():
+    """Main Streamlit application."""
+    st.title("🤖 LangGraph Agent with Feedback Loop")
+    st.markdown("---")
+    
+    # Initialize session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "last_user_input" not in st.session_state:
+        st.session_state.last_user_input = ""
+    if "last_response" not in st.session_state:
+        st.session_state.last_response = ""
+    if "show_feedback" not in st.session_state:
+        st.session_state.show_feedback = False
+    
+    # Initialize current assistant ID
+    if "current_assistant_id" not in st.session_state:
+        st.session_state.current_assistant_id = "agent"
+    
+    # Initialize client
+    client = initialize_client()
+    if not client:
+        st.stop()
+    
+    # Configuration section
+    st.header("⚙️ Configuration")
+    
+    # Display current assistant information
+    with st.expander("📋 Current Assistant Info", expanded=False):
+        if st.button("🔄 Refresh Assistant Info"):
+            config_info = get_assistant_configuration(client, st.session_state.current_assistant_id)
+            if config_info:
+                st.json(config_info)
+            else:
+                st.warning("Could not retrieve assistant configuration")
+    
+    
+    # System prompt configuration
+    default_prompt = "You are a helpful AI assistant. Be concise and helpful in your responses."
+    system_prompt = st.text_area(
+        "System Prompt:",
+        value=st.session_state.get("system_prompt", default_prompt),
+        height=100,
+        help="Configure how the agent should behave"
+    )
+    st.session_state.system_prompt = system_prompt
+    
+    st.markdown("---")
+    
+    # Chat interface
+    st.header("💬 Chat with Agent")
+    
+    # User input
+    user_input = st.text_input(
+        "Your message:",
+        placeholder="Ask me anything...",
+        key="user_input"
+    )
+    
+    # Run agent button
+    if st.button("🚀 Run Agent", type="primary"):
+        if user_input.strip():
+            st.session_state.last_user_input = user_input
+            st.session_state.show_feedback = False
+            
+            # Display user message
+            st.markdown(f"**You:** {user_input}")
+            
+            # Stream agent response
+            with st.spinner("Agent is thinking..."):
+                messages, response = stream_agent_response(client, user_input, system_prompt, st.session_state.current_assistant_id)
+                st.session_state.messages = messages
+                st.session_state.last_response = response
+                st.session_state.show_feedback = True
+        else:
+            st.warning("Please enter a message first!")
+    
+    # Feedback section (shown after agent response)
+    if st.session_state.show_feedback and st.session_state.last_response:
+        st.markdown("---")
+        st.header("📝 Provide Feedback")
+        
+        feedback = st.text_area(
+            "How can the agent improve its response?",
+            placeholder="e.g., 'Be more detailed', 'Use simpler language', 'Be more creative'...",
+            height=80
+        )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📤 Submit Feedback & Update Config"):
+                if feedback.strip():
+                    with st.spinner("Updating assistant configuration..."):
+                        # Use the LangGraph Platform API to update configuration
+                        updated_prompt, new_assistant_id = manage_feedback_workflow(
+                            client, 
+                            st.session_state.current_assistant_id, 
+                            feedback, 
+                            st.session_state.system_prompt
+                        )
+                        
+                        if updated_prompt and new_assistant_id:
+                            # Update session state with new configuration
+                            st.session_state.system_prompt = updated_prompt
+                            st.session_state.current_assistant_id = new_assistant_id
+                            
+                            st.success("✅ Assistant configuration updated via LangGraph Platform!")
+                            st.info(f"**New Assistant ID:** {new_assistant_id}")
+                            st.info(f"**Updated System Prompt:** {updated_prompt}")
+                        else:
+                            st.error("Failed to update assistant configuration. Using local update as fallback.")
+                    # Show rerun option
+                    st.session_state.show_rerun = True
+                else:
+                    st.warning("Please provide feedback first!")
+        
+        with col2:
+            if st.session_state.get("show_rerun", False):
+                if st.button("🔄 Rerun with Updated Config"):
+                    if st.session_state.last_user_input:
+                        st.session_state.show_feedback = False
+                        st.session_state.show_rerun = False
+                        
+                        # Display user message again
+                        st.markdown(f"**You:** {st.session_state.last_user_input}")
+                        
+                        # Stream agent response with updated config
+                        with st.spinner("Agent is thinking with updated configuration..."):
+                            messages, response = stream_agent_response(
+                                client,
+                                st.session_state.last_user_input, 
+                                st.session_state.system_prompt,
+                                st.session_state.current_assistant_id
+                            )
+                            st.session_state.messages = messages
+                            st.session_state.last_response = response
+                            st.session_state.show_feedback = True
+    
+    # Sidebar with information
+    with st.sidebar:
+        st.header("ℹ️ Information")
+        st.markdown("""
+        **How to use:**
+        1. Configure the system prompt
+        2. Enter your message
+        3. Click "Run Agent" to get a response
+        4. Provide feedback on the response
+        5. Submit feedback to update configuration
+        6. Rerun with the updated configuration
+        
+        **Features:**
+        - Real-time streaming responses
+        - Configurable system prompts
+        - Feedback-based configuration updates
+        - Tool calling capabilities (web search)
+        """)
+        
+        if st.button("🔄 Reset Configuration"):
+            st.session_state.system_prompt = default_prompt
+            st.session_state.messages = []
+            st.session_state.show_feedback = False
+            st.session_state.show_rerun = False
+            st.rerun()
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+

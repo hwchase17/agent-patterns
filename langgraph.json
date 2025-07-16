@@ -1,0 +1,16 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": {
+      "path": "agent.py:graph",
+      "config_schema": {
+        "system_prompt": {
+          "type": "string",
+          "default": "You are a helpful AI assistant. Be concise and helpful in your responses."
+        }
+      }
+    }
+  },
+  "env": ".env"
+}
+

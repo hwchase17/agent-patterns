@@ -1,0 +1,9 @@
+langgraph
+streamlit
+langgraph-sdk
+langchain
+langchain-core
+langchain-openai
+langchain-tavily
+python-dotenv
+
