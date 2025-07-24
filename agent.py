@@ -1112,6 +1112,230 @@ class MultiAgentManager:
             print(f"Error cancelling runs for agent {agent_name}: {e}")
             raise
     
+    # Comprehensive Error Handling Methods
+    
+    def _handle_remote_communication_error(self, agent_name: str, operation: str, error: Exception) -> Dict[str, Any]:
+        """Handle remote agent communication failures with comprehensive error reporting."""
+        error_details = {
+            "error_type": "remote_communication_failure",
+            "agent_name": agent_name,
+            "operation": operation,
+            "timestamp": datetime.now().isoformat(),
+            "error_message": str(error),
+            "original_error_type": type(error).__name__
+        }
+        
+        # Log the error with appropriate level
+        logger.error(f"Remote communication failed for {agent_name} during {operation}: {error}")
+        
+        # Check for specific error types
+        if "timeout" in str(error).lower():
+            error_details["error_category"] = "timeout"
+            error_details["suggested_action"] = "Retry with increased timeout or check agent availability"
+        elif "authentication" in str(error).lower() or "unauthorized" in str(error).lower():
+            error_details["error_category"] = "authentication"
+            error_details["suggested_action"] = "Check API key and authentication credentials"
+        elif "connection" in str(error).lower() or "network" in str(error).lower():
+            error_details["error_category"] = "network"
+            error_details["suggested_action"] = "Check network connectivity and agent endpoint"
+        else:
+            error_details["error_category"] = "unknown"
+            error_details["suggested_action"] = "Check agent logs and system status"
+        
+        return error_details
+    
+    def _handle_timeout_scenario(self, operation: str, timeout_duration: int, agent_name: str = None) -> Dict[str, Any]:
+        """Handle timeout scenarios with appropriate fallback strategies."""
+        timeout_details = {
+            "error_type": "timeout",
+            "operation": operation,
+            "timeout_duration": timeout_duration,
+            "timestamp": datetime.now().isoformat(),
+            "agent_name": agent_name
+        }
+        
+        logger.warning(f"Operation '{operation}' timed out after {timeout_duration} seconds" + 
+                      (f" for agent {agent_name}" if agent_name else ""))
+        
+        # Determine fallback strategy based on operation type
+        if "invoke" in operation.lower():
+            timeout_details["fallback_strategy"] = "retry_with_increased_timeout"
+            timeout_details["suggested_timeout"] = timeout_duration * 2
+        elif "cancel" in operation.lower():
+            timeout_details["fallback_strategy"] = "force_termination"
+            timeout_details["suggested_action"] = "Consider emergency stop if critical"
+        elif "status" in operation.lower() or "monitor" in operation.lower():
+            timeout_details["fallback_strategy"] = "use_cached_data"
+            timeout_details["suggested_action"] = "Use last known status or default values"
+        else:
+            timeout_details["fallback_strategy"] = "graceful_degradation"
+            timeout_details["suggested_action"] = "Continue with limited functionality"
+        
+        return timeout_details
+    
+    def _handle_authentication_error(self, operation: str, error_details: str = None) -> Dict[str, Any]:
+        """Handle authentication failures with appropriate recovery strategies."""
+        auth_error = {
+            "error_type": "authentication_failure",
+            "operation": operation,
+            "timestamp": datetime.now().isoformat(),
+            "error_details": error_details or "Authentication credentials invalid or expired"
+        }
+        
+        logger.error(f"Authentication failed during {operation}: {error_details}")
+        
+        # Determine recovery strategy
+        if self.api_key:
+            auth_error["recovery_strategy"] = "refresh_credentials"
+            auth_error["suggested_action"] = "Verify API key validity and refresh if needed"
+        else:
+            auth_error["recovery_strategy"] = "configure_credentials"
+            auth_error["suggested_action"] = "Configure valid API key and authentication"
+        
+        # Check if we can attempt credential refresh
+        auth_error["can_retry"] = bool(self.api_key and self.platform_url)
+        
+        return auth_error
+    
+    def _create_error_recovery_tools(self):
+        """Create tools for error recovery and system diagnostics."""
+        
+        @tool(name="diagnose_system_errors", description="Diagnose and report system errors")
+        def diagnose_system_errors() -> str:
+            """Diagnose current system errors and provide recovery suggestions."""
+            try:
+                diagnostics = {
+                    "timestamp": datetime.now().isoformat(),
+                    "system_status": "checking",
+                    "issues_found": []
+                }
+                
+                # Check SDK client connectivity
+                if not self.sync_client:
+                    diagnostics["issues_found"].append({
+                        "issue": "SDK client not initialized",
+                        "severity": "critical",
+                        "recovery": "Initialize SDK client with valid credentials"
+                    })
+                
+                # Check remote graph connections
+                for agent_name in self.remote_agents_config.keys():
+                    try:
+                        status = self.get_remote_graph_status(agent_name)
+                        if status["status"] != "connected":
+                            diagnostics["issues_found"].append({
+                                "issue": f"Agent {agent_name} not connected",
+                                "severity": "high",
+                                "recovery": f"Check {agent_name} configuration and connectivity"
+                            })
+                    except Exception as e:
+                        diagnostics["issues_found"].append({
+                            "issue": f"Cannot check {agent_name} status: {str(e)}",
+                            "severity": "medium",
+                            "recovery": "Investigate agent status checking mechanism"
+                        })
+                
+                # Check for recent errors in runs
+                try:
+                    recent_runs = self.list_runs(limit=20)
+                    error_runs = [run for run in recent_runs if run["status"] == "error"]
+                    if len(error_runs) > len(recent_runs) * 0.3:  # More than 30% error rate
+                        diagnostics["issues_found"].append({
+                            "issue": f"High error rate: {len(error_runs)}/{len(recent_runs)} runs failed",
+                            "severity": "high",
+                            "recovery": "Investigate common failure patterns and agent health"
+                        })
+                except Exception as e:
+                    diagnostics["issues_found"].append({
+                        "issue": f"Cannot check run history: {str(e)}",
+                        "severity": "medium",
+                        "recovery": "Check SDK client and platform connectivity"
+                    })
+                
+                # Generate report
+                if not diagnostics["issues_found"]:
+                    return "System diagnostics: No critical issues found. System appears healthy."
+                
+                report = f"System Diagnostics Report ({len(diagnostics['issues_found'])} issues found):
+                for i, issue in enumerate(diagnostics["issues_found"], 1):
+                    report += f"{i}. [{issue['severity'].upper()}] {issue['issue']}
+                    report += f"   Recovery: {issue['recovery']}
+                
+                return report
+                
+            except Exception as e:
+                return f"Error during system diagnostics: {str(e)}"
+        
+        @tool(name="attempt_error_recovery", description="Attempt automatic error recovery")
+        def attempt_error_recovery() -> str:
+            """Attempt to automatically recover from common errors."""
+            try:
+                recovery_actions = []
+                
+                # Attempt to reinitialize SDK clients
+                if not self.sync_client and self.api_key:
+                    try:
+                        self._initialize_sdk_clients()
+                        recovery_actions.append("✓ SDK client reinitialized successfully")
+                    except Exception as e:
+                        recovery_actions.append(f"✗ Failed to reinitialize SDK client: {str(e)}")
+                
+                # Attempt to reconnect remote graphs
+                for agent_name in self.remote_agents_config.keys():
+                    try:
+                        status = self.get_remote_graph_status(agent_name)
+                        if status["status"] != "connected":
+                            # Attempt to reinitialize the remote graph
+                            config = self.remote_agents_config[agent_name]
+                            self._initialize_single_remote_graph(agent_name, config)
+                            recovery_actions.append(f"✓ Reconnected to {agent_name}")
+                    except Exception as e:
+                        recovery_actions.append(f"✗ Failed to reconnect {agent_name}: {str(e)}")
+                
+                if not recovery_actions:
+                    return "No recovery actions needed - system appears healthy."
+                
+                return "Error Recovery Results:
+                
+            except Exception as e:
+                return f"Error during recovery attempt: {str(e)}"
+        
+        return [diagnose_system_errors, attempt_error_recovery]
+    
+    def _initialize_single_remote_graph(self, agent_name: str, config: Dict[str, Any]):
+        """Initialize a single remote graph with comprehensive error handling."""
+        try:
+            if self.sync_client:
+                # Use SDK client for initialization
+                remote_graph = RemoteGraph(
+                    name=config["graph_name"],
+                    sync_client=self.sync_client
+                )
+            else:
+                # Use URL-based initialization
+                remote_graph = RemoteGraph(
+                    name=config["graph_name"],
+                    api_key=self.api_key,
+                    url=self.platform_url
+                )
+            
+            # Test the connection
+            test_result = remote_graph.invoke({"messages": [HumanMessage(content="test")]})
+            
+            # Create enhanced wrapper
+            enhanced_graph = self._create_enhanced_remote_graph(agent_name, remote_graph)
+            self.remote_graphs[agent_name] = enhanced_graph
+            
+            logger.info(f"Successfully initialized remote graph for {agent_name}")
+            
+        except Exception as e:
+            error_details = self._handle_remote_communication_error(agent_name, "initialization", e)
+            logger.error(f"Remote graph initialization failed: {error_details}")
+            
+            # Create fallback
+            self.remote_graphs[agent_name] = self._create_fallback_remote_graph(agent_name, config)
+            raise RemoteGraphInitializationError(agent_name, str(e), e)
+    
     def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
         """Create a handoff tool for delegating tasks to a specific remote agent."""
         
@@ -1336,5 +1560,6 @@ app = create_app()
 if __name__ == "__main__":
     print("Multi-Agent Management System initialized successfully!")
     print("Use LangGraph Studio or the LangGraph CLI to interact with the agent.")
+
 
 
