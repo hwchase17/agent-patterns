@@ -23,6 +23,10 @@ from langgraph_sdk.schema import RunStatus, ThreadStatus
 import logging
 
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 class AgentManagementState(MessagesState):
     """Extended state for agent management with tracking capabilities."""
     
@@ -37,6 +41,7 @@ class AgentManagementState(MessagesState):
     
     # Progress tracking
     progress_updates: List[Dict[str, Any]] = []
+
 
 
 class MultiAgentManager:
@@ -200,3 +205,4 @@ class MultiAgentManager:
         handoff_tools = []
         for agent_name, agent_config in self.remote_agents_config.items():
             tool = self._create_handoff_tool(agent_name, agent_config)
+
