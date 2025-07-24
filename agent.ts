@@ -109,7 +109,7 @@ async function conversationNode(state: State): Promise<Partial<State>> {
   if (summary && summary.trim()) {
     const summaryMessage = new SystemMessage({
       id: uuidv4(),
-      content: `Previous conversation summary: ${summary}
+      content: `Previous conversation summary: ${summary}`
     });
     conversationMessages = [summaryMessage, ...conversationMessages];
   }
