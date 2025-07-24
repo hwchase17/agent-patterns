@@ -507,6 +507,152 @@ class MultiAgentManager:
             print(f"Error monitoring active runs: {e}")
             return {}
     
+    # Thread Management Methods using ThreadsClient
+    
+    def get_thread_state(self, thread_id: str) -> Dict[str, Any]:
+        """Get the current state of a thread using ThreadsClient.get_state()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot get thread state.")
+        
+        try:
+            thread_state = self.sync_client.threads.get_state(thread_id)
+            return {
+                "thread_id": thread_id,
+                "values": thread_state.values,
+                "next": thread_state.next,
+                "config": thread_state.config,
+                "metadata": thread_state.metadata,
+                "created_at": thread_state.created_at,
+                "parent_config": thread_state.parent_config
+            }
+        except Exception as e:
+            print(f"Error getting thread state for {thread_id}: {e}")
+            raise
+    
+    def update_thread_state(self, thread_id: str, values: Dict[str, Any], 
+                           as_node: Optional[str] = None) -> Dict[str, Any]:
+        """Update the state of a thread using ThreadsClient.update_state()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot update thread state.")
+        
+        try:
+            updated_state = self.sync_client.threads.update_state(
+                thread_id=thread_id,
+                values=values,
+                as_node=as_node
+            )
+            
+            print(f"Updated thread {thread_id} state")
+            return {
+                "thread_id": thread_id,
+                "values": updated_state.values,
+                "next": updated_state.next,
+                "config": updated_state.config,
+                "metadata": updated_state.metadata,
+                "updated": True
+            }
+        except Exception as e:
+            print(f"Error updating thread state for {thread_id}: {e}")
+            raise
+    
+    def get_thread_history(self, thread_id: str, limit: int = 10, 
+                          before: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get the history of a thread using ThreadsClient.get_history()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot get thread history.")
+        
+        try:
+            history = self.sync_client.threads.get_history(
+                thread_id=thread_id,
+                limit=limit,
+                before=before
+            )
+            
+            history_list = []
+            for state in history:
+                history_list.append({
+                    "values": state.values,
+                    "next": state.next,
+                    "config": state.config,
+                    "metadata": state.metadata,
+                    "created_at": state.created_at,
+                    "parent_config": state.parent_config
+                })
+            
+            return history_list
+        except Exception as e:
+            print(f"Error getting thread history for {thread_id}: {e}")
+            raise
+    
+    def monitor_thread_progress(self, thread_id: str) -> Dict[str, Any]:
+        """Monitor the progress of a specific thread by analyzing its state and history."""
+        try:
+            # Get current thread state
+            current_state = self.get_thread_state(thread_id)
+            
+            # Get recent history to understand progress
+            history = self.get_thread_history(thread_id, limit=5)
+            
+            # Analyze progress
+            progress_info = {
+                "thread_id": thread_id,
+                "current_state": current_state,
+                "history_count": len(history),
+                "last_updated": current_state.get("created_at"),
+                "next_steps": current_state.get("next", []),
+                "is_active": len(current_state.get("next", [])) > 0,
+                "conversation_length": len(current_state.get("values", {}).get("messages", []))
+            }
+            
+            # Extract key progress indicators
+            if history:
+                progress_info["recent_activity"] = [
+                    {
+                        "timestamp": state.get("created_at"),
+                        "next_steps": state.get("next", []),
+                        "message_count": len(state.get("values", {}).get("messages", []))
+                    }
+                    for state in history[:3]
+                ]
+            
+            return progress_info
+        except Exception as e:
+            print(f"Error monitoring thread progress for {thread_id}: {e}")
+            return {"thread_id": thread_id, "error": str(e)}
+    
+    def get_active_threads(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about all active threads by analyzing recent runs."""
+        if not self.sync_client:
+            return {}
+        
+        try:
+            # Get recent runs to find active threads
+            recent_runs = self.list_runs(limit=50)
+            
+            active_threads = {}
+            thread_ids = set()
+            
+            # Collect unique thread IDs from recent runs
+            for run in recent_runs:
+                if run["status"] in ["pending", "running"]:
+                    thread_ids.add(run["thread_id"])
+            
+            # Get progress information for each active thread
+            for thread_id in thread_ids:
+                try:
+                    progress = self.monitor_thread_progress(thread_id)
+                    active_threads[thread_id] = progress
+                except Exception as e:
+                    active_threads[thread_id] = {
+                        "thread_id": thread_id,
+                        "error": f"Failed to get progress: {str(e)}"
+                    }
+            
+            return active_threads
+        except Exception as e:
+            print(f"Error getting active threads: {e}")
+            return {}
+    
     def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
         """Create a handoff tool for delegating tasks to a specific remote agent."""
         
@@ -591,6 +737,7 @@ class MultiAgentManager:
         handoff_tools = []
         for agent_name, agent_config in self.remote_agents_config.items():
             tool = self._create_handoff_tool(agent_name, agent_config)
+
 
 
 
