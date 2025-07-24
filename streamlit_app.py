@@ -174,7 +174,7 @@ def handle_feedback_and_rerun():
         if st.button("Update Configuration", type="primary"):
             if feedback.strip():
                 # Update system prompt based on feedback
-                updated_prompt = f"{st.session_state.system_prompt}
+                updated_prompt = f"{st.session_state.system_prompt}\n\nAdditional guidance based on user feedback: {feedback}"
                 st.session_state.system_prompt = updated_prompt
                 st.success("Configuration updated with your feedback!")
                 
