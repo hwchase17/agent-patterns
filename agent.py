@@ -732,6 +732,218 @@ class MultiAgentManager:
         
         return [get_thread_state_tool, monitor_thread_progress_tool, get_active_threads_tool, get_thread_history_tool]
     
+    def _create_progress_monitoring_tools(self):
+        """Create tools for progress monitoring and status reporting."""
+        
+        @tool(name="get_overall_progress", description="Get overall progress summary of all agents and operations")
+        def get_overall_progress() -> str:
+            """Get a comprehensive overview of all agent progress and system status."""
+            try:
+                # Get active runs
+                active_runs = self.monitor_active_runs()
+                
+                # Get active threads
+                active_threads = self.get_active_threads()
+                
+                # Build comprehensive progress report
+                report = "=== AGENT MANAGEMENT SYSTEM STATUS ===
+                
+                # Active runs summary
+                report += f"Active Runs: {len(active_runs)}
+                if active_runs:
+                    for run_id, run_info in active_runs.items():
+                        agent_name = run_info.get('agent_name', 'unknown')
+                        status = run_info.get('status', 'unknown')
+                        created = run_info.get('created_at', 'N/A')
+                        report += f"  - {run_id[:8]}... ({agent_name}): {status} - {created}
+                else:
+                    report += "  No active runs
+                
+                # Active threads summary
+                report += f"
+                if active_threads:
+                    for thread_id, thread_info in active_threads.items():
+                        if "error" not in thread_info:
+                            msg_count = thread_info.get('conversation_length', 0)
+                            is_active = thread_info.get('is_active', False)
+                            report += f"  - {thread_id[:8]}...: {msg_count} messages, Active: {is_active}
+                        else:
+                            report += f"  - {thread_id[:8]}...: Error - {thread_info['error']}
+                else:
+                    report += "  No active threads
+                
+                # Agent availability
+                agent_status = self.list_available_agents()
+                report += f"
+                for agent_name, agent_info in agent_status.items():
+                    conn_status = agent_info['connection_status']['status']
+                    report += f"  - {agent_name}: {conn_status}
+                
+                return report
+                
+            except Exception as e:
+                return f"Error getting overall progress: {str(e)}"
+        
+        @tool(name="query_agent_status", description="Query the status of a specific agent")
+        def query_agent_status(
+            agent_name: Annotated[str, "Name of the agent to query status for"]
+        ) -> str:
+            """Query the detailed status of a specific agent."""
+            try:
+                if agent_name not in self.remote_agents_config:
+                    return f"Agent '{agent_name}' not found. Available agents: {list(self.remote_agents_config.keys())}"
+                
+                # Get agent connection status
+                status_info = self.get_remote_graph_status(agent_name)
+                
+                # Get recent runs for this agent
+                recent_runs = self.list_runs(limit=20)
+                agent_runs = [run for run in recent_runs 
+                            if run.get('metadata', {}).get('agent_name') == agent_name]
+                
+                report = f"=== STATUS FOR AGENT: {agent_name.upper()} ===
+                report += f"Connection Status: {status_info['status']}
+                report += f"Message: {status_info['message']}
+                
+                if 'graph_name' in status_info:
+                    report += f"Graph Name: {status_info['graph_name']}
+                
+                report += f"
+                if agent_runs:
+                    for run in agent_runs[:5]:  # Show last 5 runs
+                        report += f"  - {run['run_id'][:8]}...: {run['status']} - {run['created_at']}
+                else:
+                    report += "  No recent runs found
+                
+                # Get agent configuration
+                config = self.remote_agents_config[agent_name]
+                report += f"
+                report += f"Description: {config['description']}
+                
+                return report
+                
+            except Exception as e:
+                return f"Error querying agent status: {str(e)}"
+        
+        @tool(name="search_progress_by_keyword", description="Search progress updates by keyword or agent name")
+        def search_progress_by_keyword(
+            keyword: Annotated[str, "Keyword to search for in progress updates"],
+            limit: Annotated[int, "Maximum number of results to return"] = 10
+        ) -> str:
+            """Search through progress updates for specific keywords or agent names."""
+            try:
+                # This would typically search through stored progress updates
+                # For now, we'll search through recent runs and threads
+                
+                results = []
+                
+                # Search recent runs
+                recent_runs = self.list_runs(limit=50)
+                for run in recent_runs:
+                    metadata = run.get('metadata', {})
+                    agent_name = metadata.get('agent_name', '')
+                    
+                    if (keyword.lower() in agent_name.lower() or 
+                        keyword.lower() in run.get('status', '').lower() or
+                        keyword.lower() in str(metadata).lower()):
+                        
+                        results.append({
+                            'type': 'run',
+                            'id': run['run_id'][:8] + '...',
+                            'agent': agent_name,
+                            'status': run['status'],
+                            'timestamp': run['created_at'],
+                            'details': f"Run {run['run_id'][:8]}... on {agent_name}: {run['status']}"
+                        })
+                
+                # Search active threads
+                active_threads = self.get_active_threads()
+                for thread_id, thread_info in active_threads.items():
+                    if keyword.lower() in thread_id.lower() or keyword.lower() in str(thread_info).lower():
+                        results.append({
+                            'type': 'thread',
+                            'id': thread_id[:8] + '...',
+                            'agent': 'multiple',
+                            'status': 'active' if thread_info.get('is_active') else 'inactive',
+                            'timestamp': thread_info.get('last_updated', 'N/A'),
+                            'details': f"Thread {thread_id[:8]}...: {thread_info.get('conversation_length', 0)} messages"
+                        })
+                
+                # Sort by timestamp (most recent first)
+                results.sort(key=lambda x: x['timestamp'], reverse=True)
+                results = results[:limit]
+                
+                if not results:
+                    return f"No progress updates found matching keyword: '{keyword}'"
+                
+                report = f"Progress Search Results for '{keyword}' ({len(results)} found):
+                for result in results:
+                    report += f"[{result['type'].upper()}] {result['details']} - {result['timestamp']}
+                
+                return report
+                
+            except Exception as e:
+                return f"Error searching progress: {str(e)}"
+        
+        @tool(name="get_system_health", description="Get overall system health and performance metrics")
+        def get_system_health() -> str:
+            """Get system health metrics and performance indicators."""
+            try:
+                health_report = "=== SYSTEM HEALTH REPORT ===
+                
+                # Check SDK client connectivity
+                client_status = "Connected" if self.sync_client else "Disconnected"
+                health_report += f"SDK Client: {client_status}
+                
+                # Check remote graph connections
+                total_agents = len(self.remote_agents_config)
+                connected_agents = 0
+                
+                for agent_name in self.remote_agents_config.keys():
+                    status = self.get_remote_graph_status(agent_name)
+                    if status['status'] == 'connected':
+                        connected_agents += 1
+                
+                health_report += f"Agent Connectivity: {connected_agents}/{total_agents} agents connected
+                
+                # Get recent activity metrics
+                recent_runs = self.list_runs(limit=100)
+                
+                # Count runs by status
+                status_counts = {}
+                for run in recent_runs:
+                    status = run['status']
+                    status_counts[status] = status_counts.get(status, 0) + 1
+                
+                health_report += f"
+                for status, count in status_counts.items():
+                    health_report += f"  - {status}: {count}
+                
+                # Calculate success rate
+                total_completed = status_counts.get('success', 0) + status_counts.get('error', 0)
+                if total_completed > 0:
+                    success_rate = (status_counts.get('success', 0) / total_completed) * 100
+                    health_report += f"
+                
+                # System recommendations
+                health_report += "
+                if connected_agents < total_agents:
+                    health_report += f"  - Check connectivity for {total_agents - connected_agents} disconnected agents
+                if not self.sync_client:
+                    health_report += "  - SDK client not initialized - check API key and configuration
+                if status_counts.get('error', 0) > status_counts.get('success', 0):
+                    health_report += "  - High error rate detected - investigate agent issues
+                
+                if connected_agents == total_agents and self.sync_client:
+                    health_report += "  - System operating normally
+                
+                return health_report
+                
+            except Exception as e:
+                return f"Error getting system health: {str(e)}"
+        
+        return [get_overall_progress, query_agent_status, search_progress_by_keyword, get_system_health]
+    
     def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
         """Create a handoff tool for delegating tasks to a specific remote agent."""
         
@@ -926,6 +1138,7 @@ class MultiAgentManager:
             return fallback_state
         
         return remote_agent_node
+
 
 
 
