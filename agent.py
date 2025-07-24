@@ -1032,7 +1032,10 @@ class MultiAgentManager:
         
         # Add thread and run management tools
         thread_management_tools = self._create_thread_management_tools()
-        all_tools = handoff_tools + thread_management_tools
+        
+        # Add progress monitoring tools
+        progress_monitoring_tools = self._create_progress_monitoring_tools()
+        all_tools = handoff_tools + thread_management_tools + progress_monitoring_tools
         
         # Create the supervisor agent with all tools
         supervisor_agent = create_react_agent(
