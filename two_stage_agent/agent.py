@@ -281,7 +281,7 @@ class TwoStageAgent:
         
         # Create review message
         review_message = HumanMessage(
-            content=f"Please review this output and determine if it's acceptable:
+            content=f"Please review this output and determine if it's acceptable:\n\n{current_result}"
         )
         
         # Get review from the review agent
