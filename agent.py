@@ -653,6 +653,85 @@ class MultiAgentManager:
             print(f"Error getting active threads: {e}")
             return {}
     
+    def _create_thread_management_tools(self):
+        """Create tools for thread management operations."""
+        
+        @tool(name="get_thread_state", description="Get the current state of a specific thread")
+        def get_thread_state_tool(
+            thread_id: Annotated[str, "The thread ID to get state for"]
+        ) -> str:
+            """Get the current state of a specific thread."""
+            try:
+                state = self.get_thread_state(thread_id)
+                message_count = len(state.get("values", {}).get("messages", []))
+                next_steps = state.get("next", [])
+                return f"Thread {thread_id}: {message_count} messages, Next steps: {next_steps}"
+            except Exception as e:
+                return f"Error getting thread state: {str(e)}"
+        
+        @tool(name="monitor_thread_progress", description="Monitor the progress of a specific thread")
+        def monitor_thread_progress_tool(
+            thread_id: Annotated[str, "The thread ID to monitor progress for"]
+        ) -> str:
+            """Monitor the progress of a specific thread."""
+            try:
+                progress = self.monitor_thread_progress(thread_id)
+                if "error" in progress:
+                    return f"Error monitoring thread {thread_id}: {progress['error']}"
+                
+                result = f"Thread {thread_id} Progress:
+                result += f"- Active: {progress['is_active']}
+                result += f"- Messages: {progress['conversation_length']}
+                result += f"- Next steps: {progress['next_steps']}
+                result += f"- Last updated: {progress['last_updated']}
+                
+                if progress.get('recent_activity'):
+                    result += "Recent activity:
+                    for activity in progress['recent_activity']:
+                        result += f"  - {activity['timestamp']}: {activity['message_count']} messages
+                
+                return result
+            except Exception as e:
+                return f"Error monitoring thread progress: {str(e)}"
+        
+        @tool(name="get_active_threads", description="Get information about all active threads")
+        def get_active_threads_tool() -> str:
+            """Get information about all currently active threads."""
+            try:
+                active_threads = self.get_active_threads()
+                if not active_threads:
+                    return "No active threads found."
+                
+                result = f"Active Threads ({len(active_threads)}):
+                for thread_id, info in active_threads.items():
+                    if "error" in info:
+                        result += f"- {thread_id}: Error - {info['error']}
+                    else:
+                        result += f"- {thread_id}: {info['conversation_length']} messages, "
+                        result += f"Active: {info['is_active']}
+                
+                return result
+            except Exception as e:
+                return f"Error getting active threads: {str(e)}"
+        
+        @tool(name="get_thread_history", description="Get the history of a specific thread")
+        def get_thread_history_tool(
+            thread_id: Annotated[str, "The thread ID to get history for"],
+            limit: Annotated[int, "Number of history entries to retrieve"] = 5
+        ) -> str:
+            """Get the history of a specific thread."""
+            try:
+                history = self.get_thread_history(thread_id, limit=limit)
+                result = f"Thread {thread_id} History (last {len(history)} entries):
+                for i, state in enumerate(history):
+                    message_count = len(state.get("values", {}).get("messages", []))
+                    result += f"{i+1}. {state.get('created_at', 'N/A')}: {message_count} messages
+                return result
+            except Exception as e:
+                return f"Error getting thread history: {str(e)}"
+        
+        return [get_thread_state_tool, monitor_thread_progress_tool, get_active_threads_tool, get_thread_history_tool]
+    
     def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
         """Create a handoff tool for delegating tasks to a specific remote agent."""
         
@@ -737,6 +816,7 @@ class MultiAgentManager:
         handoff_tools = []
         for agent_name, agent_config in self.remote_agents_config.items():
             tool = self._create_handoff_tool(agent_name, agent_config)
+
 
 
 
