@@ -1,0 +1,1568 @@
+"""
+Multi-Agent Management Chat System
+
+This module implements a management agent that can coordinate and monitor
+multiple remote agents deployed on LangGraph Platform. It provides capabilities
+for task delegation, progress monitoring, and agent control.
+"""
+
+import os
+import uuid
+import asyncio
+from typing import Annotated, Dict, List, Optional, Any
+from datetime import datetime
+
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.tools import tool, InjectedToolCallId
+from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.prebuilt import InjectedState, create_react_agent
+from langgraph.types import Command, Send
+from langgraph.pregel.remote import RemoteGraph
+from langgraph_sdk import get_client, get_sync_client
+from langgraph_sdk.schema import RunStatus, ThreadStatus
+import logging
+
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class AgentManagementState(MessagesState):
+    """Extended state for agent management with tracking capabilities."""
+    
+    # Track active remote agents and their runs
+    active_runs: Dict[str, Dict[str, Any]] = {}
+    
+    # Track agent configurations
+    remote_agents: Dict[str, Dict[str, Any]] = {}
+    
+    # Current operation context
+    current_operation: Optional[str] = None
+    
+    # Progress tracking
+    progress_updates: List[Dict[str, Any]] = []
+
+
+
+class MultiAgentManager:
+    """
+    Multi-Agent Management System
+    
+    Coordinates multiple remote agents deployed on LangGraph Platform,
+    providing task delegation, monitoring, and control capabilities.
+    """
+    
+    def __init__(
+        self,
+        platform_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        remote_agents_config: Optional[Dict[str, Dict[str, Any]]] = None
+    ):
+        """
+        Initialize the Multi-Agent Manager.
+        
+        Args:
+            platform_url: URL of the LangGraph Platform deployment
+            api_key: LangSmith API key for authentication
+            remote_agents_config: Configuration for remote agents
+        """
+        self.platform_url = platform_url or os.getenv("LANGGRAPH_PLATFORM_URL")
+        self.api_key = api_key or os.getenv("LANGSMITH_API_KEY")
+        
+        # Initialize SDK clients
+        if self.platform_url:
+            self.client = get_client(url=self.platform_url, api_key=self.api_key)
+            self.sync_client = get_sync_client(url=self.platform_url, api_key=self.api_key)
+        else:
+            self.client = None
+            self.sync_client = None
+        
+        # Default remote agents configuration
+        self.remote_agents_config = remote_agents_config or {
+            "research_agent": {
+                "graph_name": "research_agent",
+                "description": "Handles research and information gathering tasks",
+                "capabilities": ["web_search", "data_analysis", "fact_checking"]
+            },
+            "data_agent": {
+                "graph_name": "data_agent", 
+                "description": "Processes and analyzes data",
+                "capabilities": ["data_processing", "calculations", "statistics"]
+            },
+            "writing_agent": {
+                "graph_name": "writing_agent",
+                "description": "Handles content creation and writing tasks",
+                "capabilities": ["content_writing", "summarization", "editing"]
+            }
+        }
+        
+        # Initialize remote graph connections
+        self.remote_graphs = {}
+        self._initialize_remote_graphs()
+        
+        # Build the management graph
+        self.graph = self._build_management_graph()
+    
+    def _initialize_remote_graphs(self):
+        """Initialize RemoteGraph connections for each configured agent."""
+        if not self.platform_url:
+            print("Warning: No platform URL provided. Remote graphs will not be initialized.")
+            return
+            
+        for agent_name, config in self.remote_agents_config.items():
+            try:
+                # Initialize RemoteGraph with both sync and async clients for full functionality
+                if self.client and self.sync_client:
+                    remote_graph = RemoteGraph(
+                        name=config["graph_name"],
+                        client=self.client,
+                        sync_client=self.sync_client,
+                        api_key=self.api_key
+                    )
+                else:
+                    # Fallback to URL-based initialization
+                    remote_graph = RemoteGraph(
+                        name=config["graph_name"],
+                        url=self.platform_url,
+                        api_key=self.api_key
+                    )
+                
+                # Wrap the remote graph with enhanced functionality
+                enhanced_graph = self._create_enhanced_remote_graph(agent_name, remote_graph, config)
+                self.remote_graphs[agent_name] = enhanced_graph
+                print(f"Initialized remote graph for {agent_name}")
+                
+            except Exception as e:
+                print(f"Failed to initialize remote graph for {agent_name}: {e}")
+                # Create a fallback placeholder
+                self.remote_graphs[agent_name] = self._create_fallback_remote_graph(agent_name, config)
+    
+    def _create_enhanced_remote_graph(self, agent_name: str, remote_graph: RemoteGraph, config: Dict[str, Any]):
+        """Create an enhanced remote graph wrapper with additional functionality."""
+        
+        def enhanced_remote_node(state: AgentManagementState):
+            """Enhanced remote graph node with proper state management and error handling."""
+            try:
+                # Extract the task information from state
+                messages = state.get("messages", [])
+                run_id = state.get("run_id")
+                priority = state.get("priority", "medium")
+                
+                # Create thread for persistence if we have SDK clients
+                thread_config = None
+                if self.sync_client and run_id:
+                    try:
+                        # Create or get existing thread
+                        thread = self.sync_client.threads.create(
+                            metadata={"agent_name": agent_name, "run_id": run_id, "priority": priority}
+                        )
+                        thread_config = {"configurable": {"thread_id": thread["thread_id"]}}
+                        print(f"Created thread {thread['thread_id']} for {agent_name} run {run_id}")
+                    except Exception as e:
+                        print(f"Failed to create thread for {agent_name}: {e}")
+                
+                # Invoke the remote graph with proper configuration
+                if thread_config:
+                    result = remote_graph.invoke(
+                        {"messages": messages},
+                        config=thread_config
+                    )
+                else:
+                    result = remote_graph.invoke({"messages": messages})
+                
+                # Update state with results
+                updated_state = {
+                    "messages": result.get("messages", []),
+                    "current_operation": f"completed_{agent_name}",
+                }
+                
+                # Add progress update
+                if "progress_updates" not in updated_state:
+                    updated_state["progress_updates"] = state.get("progress_updates", [])
+                
+                updated_state["progress_updates"].append({
+                    "timestamp": datetime.now().isoformat(),
+                    "event": "task_completed",
+                    "agent": agent_name,
+                    "run_id": run_id,
+                    "message": f"Task completed by {agent_name}",
+                    "thread_id": thread_config["configurable"]["thread_id"] if thread_config else None
+                })
+                
+                return updated_state
+                
+            except Exception as e:
+                print(f"Error in enhanced remote node for {agent_name}: {e}")
+                # Return error state
+                return {
+                    "messages": [
+                        AIMessage(content=f"Error executing task on {agent_name}: {str(e)}")
+                    ],
+                    "current_operation": f"error_{agent_name}",
+                    "progress_updates": state.get("progress_updates", []) + [{
+                        "timestamp": datetime.now().isoformat(),
+                        "event": "task_error",
+                        "agent": agent_name,
+                        "run_id": state.get("run_id"),
+                        "message": f"Error in {agent_name}: {str(e)}"
+                    }]
+                }
+        
+        return enhanced_remote_node
+    
+    def _create_fallback_remote_graph(self, agent_name: str, config: Dict[str, Any]):
+        """Create a fallback node when RemoteGraph initialization fails."""
+        def fallback_node(state: AgentManagementState):
+            print(f"Using fallback node for {agent_name}")
+            return {
+                "messages": [
+                    AIMessage(content=f"[Fallback Mode] {agent_name} is not available. "
+                                    f"This would normally handle: {config['description']}")
+                ],
+                "current_operation": f"fallback_{agent_name}",
+                "progress_updates": state.get("progress_updates", []) + [{
+                    "timestamp": datetime.now().isoformat(),
+                    "event": "fallback_used",
+                    "agent": agent_name,
+                    "run_id": state.get("run_id"),
+                    "message": f"Fallback mode activated for {agent_name}"
+                }]
+            }
+        return fallback_node
+    
+    async def _invoke_remote_graph_async(self, agent_name: str, input_data: Dict[str, Any], 
+                                       thread_config: Optional[Dict[str, Any]] = None):
+        """Asynchronously invoke a remote graph."""
+        if agent_name not in self.remote_graphs:
+            raise ValueError(f"Remote graph {agent_name} not found")
+        
+        remote_graph = self.remote_graphs[agent_name]
+        
+        try:
+            if hasattr(remote_graph, 'ainvoke'):
+                if thread_config:
+                    result = await remote_graph.ainvoke(input_data, config=thread_config)
+                else:
+                    result = await remote_graph.ainvoke(input_data)
+            else:
+                # Fallback to sync invoke in thread pool
+                loop = asyncio.get_event_loop()
+                if thread_config:
+                    result = await loop.run_in_executor(
+                        None, lambda: remote_graph.invoke(input_data, config=thread_config)
+                    )
+                else:
+                    result = await loop.run_in_executor(
+                        None, lambda: remote_graph.invoke(input_data)
+                    )
+            return result
+        except Exception as e:
+            print(f"Error invoking remote graph {agent_name}: {e}")
+            raise
+    
+    def _invoke_remote_graph_sync(self, agent_name: str, input_data: Dict[str, Any],
+                                thread_config: Optional[Dict[str, Any]] = None):
+        """Synchronously invoke a remote graph."""
+        if agent_name not in self.remote_graphs:
+            raise ValueError(f"Remote graph {agent_name} not found")
+        
+        remote_graph = self.remote_graphs[agent_name]
+        
+        try:
+            if thread_config:
+                result = remote_graph.invoke(input_data, config=thread_config)
+            else:
+                result = remote_graph.invoke(input_data)
+            return result
+        except Exception as e:
+            print(f"Error invoking remote graph {agent_name}: {e}")
+            raise
+    
+    def get_remote_graph_status(self, agent_name: str) -> Dict[str, Any]:
+        """Get the status of a remote graph connection."""
+        if agent_name not in self.remote_graphs:
+            return {"status": "not_found", "message": f"Agent {agent_name} not configured"}
+        
+        try:
+            # Check if the remote graph is available and properly initialized
+            remote_graph = self.remote_graphs[agent_name]
+            if hasattr(remote_graph, '__call__'):
+                # This is our enhanced wrapper function
+                return {
+                    "status": "connected", 
+                    "message": f"Remote graph {agent_name} is available",
+                    "graph_name": self.remote_agents_config[agent_name]["graph_name"]
+                }
+            else:
+                return {
+                    "status": "fallback",
+                    "message": f"Remote graph {agent_name} is in fallback mode"
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Error checking {agent_name}: {str(e)}"
+            }
+    
+    def list_available_agents(self) -> Dict[str, Dict[str, Any]]:
+        """List all available remote agents and their status."""
+        agents_status = {}
+        for agent_name in self.remote_agents_config.keys():
+            agents_status[agent_name] = {
+                **self.remote_agents_config[agent_name],
+                "connection_status": self.get_remote_graph_status(agent_name)
+            }
+        return agents_status
+    
+    # Run Management Methods using RunsClient
+    
+    def create_run(self, agent_name: str, input_data: Dict[str, Any], 
+                   thread_id: Optional[str] = None, priority: str = "medium",
+                   metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create a new run for a remote agent using RunsClient."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot create runs.")
+        
+        if agent_name not in self.remote_agents_config:
+            raise ValueError(f"Agent {agent_name} not configured")
+        
+        try:
+            # Get the assistant ID for the agent (assuming it matches the graph name)
+            assistant_id = self.remote_agents_config[agent_name]["graph_name"]
+            
+            # Prepare run metadata
+            run_metadata = {
+                "agent_name": agent_name,
+                "priority": priority,
+                "created_by": "management_agent",
+                **(metadata or {})
+            }
+            
+            # Create the run
+            run = self.sync_client.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                input=input_data,
+                metadata=run_metadata
+            )
+            
+            print(f"Created run {run.run_id} for {agent_name} on thread {run.thread_id}")
+            return {
+                "run_id": run.run_id,
+                "thread_id": run.thread_id,
+                "assistant_id": run.assistant_id,
+                "status": run.status,
+                "created_at": run.created_at,
+                "agent_name": agent_name
+            }
+            
+        except Exception as e:
+            print(f"Error creating run for {agent_name}: {e}")
+            raise
+    
+    def get_run(self, run_id: str) -> Dict[str, Any]:
+        """Get details of a specific run using RunsClient."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot get run details.")
+        
+        try:
+            run = self.sync_client.runs.get(run_id)
+            return {
+                "run_id": run.run_id,
+                "thread_id": run.thread_id,
+                "assistant_id": run.assistant_id,
+                "status": run.status,
+                "created_at": run.created_at,
+                "updated_at": run.updated_at,
+                "metadata": run.metadata
+            }
+        except Exception as e:
+            print(f"Error getting run {run_id}: {e}")
+            raise
+    
+    def list_runs(self, thread_id: Optional[str] = None, 
+                  limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+        """List runs using RunsClient with optional filtering."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot list runs.")
+        
+        try:
+            runs = self.sync_client.runs.list(
+                thread_id=thread_id,
+                limit=limit,
+                offset=offset
+            )
+            
+            return [
+                {
+                    "run_id": run.run_id,
+                    "thread_id": run.thread_id,
+                    "assistant_id": run.assistant_id,
+                    "status": run.status,
+                    "created_at": run.created_at,
+                    "updated_at": run.updated_at,
+                    "metadata": run.metadata
+                }
+                for run in runs
+            ]
+        except Exception as e:
+            print(f"Error listing runs: {e}")
+            raise
+    
+    def cancel_run(self, run_id: str) -> Dict[str, Any]:
+        """Cancel a running agent using RunsClient.cancel()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot cancel run.")
+        
+        try:
+            # Cancel the run
+            self.sync_client.runs.cancel(run_id)
+            
+            # Get updated run status
+            run = self.sync_client.runs.get(run_id)
+            
+            print(f"Cancelled run {run_id}. Status: {run.status}")
+            return {
+                "run_id": run.run_id,
+                "status": run.status,
+                "updated_at": run.updated_at,
+                "cancelled": True
+            }
+        except Exception as e:
+            print(f"Error cancelling run {run_id}: {e}")
+            raise
+    
+    def wait_for_run(self, run_id: str, timeout: Optional[int] = None) -> Dict[str, Any]:
+        """Wait for a run to complete using RunsClient.wait()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot wait for run.")
+        
+        try:
+            # Wait for the run to complete
+            run = self.sync_client.runs.wait(run_id, timeout=timeout)
+            
+            print(f"Run {run_id} completed with status: {run.status}")
+            return {
+                "run_id": run.run_id,
+                "thread_id": run.thread_id,
+                "status": run.status,
+                "updated_at": run.updated_at,
+                "completed": run.status in ["success", "error", "timeout", "interrupted"]
+            }
+        except Exception as e:
+            print(f"Error waiting for run {run_id}: {e}")
+            raise
+    
+    def stream_run(self, run_id: str):
+        """Stream run updates using RunsClient.join_stream()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot stream run.")
+        
+        try:
+            # Stream run updates
+            for chunk in self.sync_client.runs.join_stream(run_id):
+                yield {
+                    "run_id": run_id,
+                    "event": chunk.event,
+                    "data": chunk.data,
+                    "timestamp": datetime.now().isoformat()
+                }
+        except Exception as e:
+            print(f"Error streaming run {run_id}: {e}")
+            raise
+    
+    def get_run_status(self, run_id: str) -> str:
+        """Get the current status of a run using RunStatus enum states."""
+        try:
+            run = self.get_run(run_id)
+            return run["status"]
+        except Exception as e:
+            print(f"Error getting run status for {run_id}: {e}")
+            return "unknown"
+    
+    def monitor_active_runs(self) -> Dict[str, Dict[str, Any]]:
+        """Monitor all active runs and return their current status."""
+        if not self.sync_client:
+            return {}
+        
+        try:
+            # Get recent runs (active ones should be at the top)
+            runs = self.list_runs(limit=50)
+            
+            active_runs = {}
+            for run in runs:
+                if run["status"] in ["pending", "running"]:
+                    active_runs[run["run_id"]] = {
+                        "run_id": run["run_id"],
+                        "thread_id": run["thread_id"],
+                        "assistant_id": run["assistant_id"],
+                        "status": run["status"],
+                        "created_at": run["created_at"],
+                        "updated_at": run["updated_at"],
+                        "agent_name": run["metadata"].get("agent_name", "unknown") if run["metadata"] else "unknown"
+                    }
+            
+            return active_runs
+        except Exception as e:
+            print(f"Error monitoring active runs: {e}")
+            return {}
+    
+    # Thread Management Methods using ThreadsClient
+    
+    def get_thread_state(self, thread_id: str) -> Dict[str, Any]:
+        """Get the current state of a thread using ThreadsClient.get_state()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot get thread state.")
+        
+        try:
+            thread_state = self.sync_client.threads.get_state(thread_id)
+            return {
+                "thread_id": thread_id,
+                "values": thread_state.values,
+                "next": thread_state.next,
+                "config": thread_state.config,
+                "metadata": thread_state.metadata,
+                "created_at": thread_state.created_at,
+                "parent_config": thread_state.parent_config
+            }
+        except Exception as e:
+            print(f"Error getting thread state for {thread_id}: {e}")
+            raise
+    
+    def update_thread_state(self, thread_id: str, values: Dict[str, Any], 
+                           as_node: Optional[str] = None) -> Dict[str, Any]:
+        """Update the state of a thread using ThreadsClient.update_state()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot update thread state.")
+        
+        try:
+            updated_state = self.sync_client.threads.update_state(
+                thread_id=thread_id,
+                values=values,
+                as_node=as_node
+            )
+            
+            print(f"Updated thread {thread_id} state")
+            return {
+                "thread_id": thread_id,
+                "values": updated_state.values,
+                "next": updated_state.next,
+                "config": updated_state.config,
+                "metadata": updated_state.metadata,
+                "updated": True
+            }
+        except Exception as e:
+            print(f"Error updating thread state for {thread_id}: {e}")
+            raise
+    
+    def get_thread_history(self, thread_id: str, limit: int = 10, 
+                          before: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get the history of a thread using ThreadsClient.get_history()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot get thread history.")
+        
+        try:
+            history = self.sync_client.threads.get_history(
+                thread_id=thread_id,
+                limit=limit,
+                before=before
+            )
+            
+            history_list = []
+            for state in history:
+                history_list.append({
+                    "values": state.values,
+                    "next": state.next,
+                    "config": state.config,
+                    "metadata": state.metadata,
+                    "created_at": state.created_at,
+                    "parent_config": state.parent_config
+                })
+            
+            return history_list
+        except Exception as e:
+            print(f"Error getting thread history for {thread_id}: {e}")
+            raise
+    
+    def monitor_thread_progress(self, thread_id: str) -> Dict[str, Any]:
+        """Monitor the progress of a specific thread by analyzing its state and history."""
+        try:
+            # Get current thread state
+            current_state = self.get_thread_state(thread_id)
+            
+            # Get recent history to understand progress
+            history = self.get_thread_history(thread_id, limit=5)
+            
+            # Analyze progress
+            progress_info = {
+                "thread_id": thread_id,
+                "current_state": current_state,
+                "history_count": len(history),
+                "last_updated": current_state.get("created_at"),
+                "next_steps": current_state.get("next", []),
+                "is_active": len(current_state.get("next", [])) > 0,
+                "conversation_length": len(current_state.get("values", {}).get("messages", []))
+            }
+            
+            # Extract key progress indicators
+            if history:
+                progress_info["recent_activity"] = [
+                    {
+                        "timestamp": state.get("created_at"),
+                        "next_steps": state.get("next", []),
+                        "message_count": len(state.get("values", {}).get("messages", []))
+                    }
+                    for state in history[:3]
+                ]
+            
+            return progress_info
+        except Exception as e:
+            print(f"Error monitoring thread progress for {thread_id}: {e}")
+            return {"thread_id": thread_id, "error": str(e)}
+    
+    def get_active_threads(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about all active threads by analyzing recent runs."""
+        if not self.sync_client:
+            return {}
+        
+        try:
+            # Get recent runs to find active threads
+            recent_runs = self.list_runs(limit=50)
+            
+            active_threads = {}
+            thread_ids = set()
+            
+            # Collect unique thread IDs from recent runs
+            for run in recent_runs:
+                if run["status"] in ["pending", "running"]:
+                    thread_ids.add(run["thread_id"])
+            
+            # Get progress information for each active thread
+            for thread_id in thread_ids:
+                try:
+                    progress = self.monitor_thread_progress(thread_id)
+                    active_threads[thread_id] = progress
+                except Exception as e:
+                    active_threads[thread_id] = {
+                        "thread_id": thread_id,
+                        "error": f"Failed to get progress: {str(e)}"
+                    }
+            
+            return active_threads
+        except Exception as e:
+            print(f"Error getting active threads: {e}")
+            return {}
+    
+    def _create_thread_management_tools(self):
+        """Create tools for thread management operations."""
+        
+        @tool(name="get_thread_state", description="Get the current state of a specific thread")
+        def get_thread_state_tool(
+            thread_id: Annotated[str, "The thread ID to get state for"]
+        ) -> str:
+            """Get the current state of a specific thread."""
+            try:
+                state = self.get_thread_state(thread_id)
+                message_count = len(state.get("values", {}).get("messages", []))
+                next_steps = state.get("next", [])
+                return f"Thread {thread_id}: {message_count} messages, Next steps: {next_steps}"
+            except Exception as e:
+                return f"Error getting thread state: {str(e)}"
+        
+        @tool(name="monitor_thread_progress", description="Monitor the progress of a specific thread")
+        def monitor_thread_progress_tool(
+            thread_id: Annotated[str, "The thread ID to monitor progress for"]
+        ) -> str:
+            """Monitor the progress of a specific thread."""
+            try:
+                progress = self.monitor_thread_progress(thread_id)
+                if "error" in progress:
+                    return f"Error monitoring thread {thread_id}: {progress['error']}"
+                
+                result = f"Thread {thread_id} Progress:
+                result += f"- Active: {progress['is_active']}
+                result += f"- Messages: {progress['conversation_length']}
+                result += f"- Next steps: {progress['next_steps']}
+                result += f"- Last updated: {progress['last_updated']}
+                
+                if progress.get('recent_activity'):
+                    result += "Recent activity:
+                    for activity in progress['recent_activity']:
+                        result += f"  - {activity['timestamp']}: {activity['message_count']} messages
+                
+                return result
+            except Exception as e:
+                return f"Error monitoring thread progress: {str(e)}"
+        
+        @tool(name="get_active_threads", description="Get information about all active threads")
+        def get_active_threads_tool() -> str:
+            """Get information about all currently active threads."""
+            try:
+                active_threads = self.get_active_threads()
+                if not active_threads:
+                    return "No active threads found."
+                
+                result = f"Active Threads ({len(active_threads)}):
+                for thread_id, info in active_threads.items():
+                    if "error" in info:
+                        result += f"- {thread_id}: Error - {info['error']}
+                    else:
+                        result += f"- {thread_id}: {info['conversation_length']} messages, "
+                        result += f"Active: {info['is_active']}
+                
+                return result
+            except Exception as e:
+                return f"Error getting active threads: {str(e)}"
+        
+        @tool(name="get_thread_history", description="Get the history of a specific thread")
+        def get_thread_history_tool(
+            thread_id: Annotated[str, "The thread ID to get history for"],
+            limit: Annotated[int, "Number of history entries to retrieve"] = 5
+        ) -> str:
+            """Get the history of a specific thread."""
+            try:
+                history = self.get_thread_history(thread_id, limit=limit)
+                result = f"Thread {thread_id} History (last {len(history)} entries):
+                for i, state in enumerate(history):
+                    message_count = len(state.get("values", {}).get("messages", []))
+                    result += f"{i+1}. {state.get('created_at', 'N/A')}: {message_count} messages
+                return result
+            except Exception as e:
+                return f"Error getting thread history: {str(e)}"
+        
+        return [get_thread_state_tool, monitor_thread_progress_tool, get_active_threads_tool, get_thread_history_tool]
+    
+    def _create_progress_monitoring_tools(self):
+        """Create tools for progress monitoring and status reporting."""
+        
+        @tool(name="get_overall_progress", description="Get overall progress summary of all agents and operations")
+        def get_overall_progress() -> str:
+            """Get a comprehensive overview of all agent progress and system status."""
+            try:
+                # Get active runs
+                active_runs = self.monitor_active_runs()
+                
+                # Get active threads
+                active_threads = self.get_active_threads()
+                
+                # Build comprehensive progress report
+                report = "=== AGENT MANAGEMENT SYSTEM STATUS ===
+                
+                # Active runs summary
+                report += f"Active Runs: {len(active_runs)}
+                if active_runs:
+                    for run_id, run_info in active_runs.items():
+                        agent_name = run_info.get('agent_name', 'unknown')
+                        status = run_info.get('status', 'unknown')
+                        created = run_info.get('created_at', 'N/A')
+                        report += f"  - {run_id[:8]}... ({agent_name}): {status} - {created}
+                else:
+                    report += "  No active runs
+                
+                # Active threads summary
+                report += f"
+                if active_threads:
+                    for thread_id, thread_info in active_threads.items():
+                        if "error" not in thread_info:
+                            msg_count = thread_info.get('conversation_length', 0)
+                            is_active = thread_info.get('is_active', False)
+                            report += f"  - {thread_id[:8]}...: {msg_count} messages, Active: {is_active}
+                        else:
+                            report += f"  - {thread_id[:8]}...: Error - {thread_info['error']}
+                else:
+                    report += "  No active threads
+                
+                # Agent availability
+                agent_status = self.list_available_agents()
+                report += f"
+                for agent_name, agent_info in agent_status.items():
+                    conn_status = agent_info['connection_status']['status']
+                    report += f"  - {agent_name}: {conn_status}
+                
+                return report
+                
+            except Exception as e:
+                return f"Error getting overall progress: {str(e)}"
+        
+        @tool(name="query_agent_status", description="Query the status of a specific agent")
+        def query_agent_status(
+            agent_name: Annotated[str, "Name of the agent to query status for"]
+        ) -> str:
+            """Query the detailed status of a specific agent."""
+            try:
+                if agent_name not in self.remote_agents_config:
+                    return f"Agent '{agent_name}' not found. Available agents: {list(self.remote_agents_config.keys())}"
+                
+                # Get agent connection status
+                status_info = self.get_remote_graph_status(agent_name)
+                
+                # Get recent runs for this agent
+                recent_runs = self.list_runs(limit=20)
+                agent_runs = [run for run in recent_runs 
+                            if run.get('metadata', {}).get('agent_name') == agent_name]
+                
+                report = f"=== STATUS FOR AGENT: {agent_name.upper()} ===
+                report += f"Connection Status: {status_info['status']}
+                report += f"Message: {status_info['message']}
+                
+                if 'graph_name' in status_info:
+                    report += f"Graph Name: {status_info['graph_name']}
+                
+                report += f"
+                if agent_runs:
+                    for run in agent_runs[:5]:  # Show last 5 runs
+                        report += f"  - {run['run_id'][:8]}...: {run['status']} - {run['created_at']}
+                else:
+                    report += "  No recent runs found
+                
+                # Get agent configuration
+                config = self.remote_agents_config[agent_name]
+                report += f"
+                report += f"Description: {config['description']}
+                
+                return report
+                
+            except Exception as e:
+                return f"Error querying agent status: {str(e)}"
+        
+        @tool(name="search_progress_by_keyword", description="Search progress updates by keyword or agent name")
+        def search_progress_by_keyword(
+            keyword: Annotated[str, "Keyword to search for in progress updates"],
+            limit: Annotated[int, "Maximum number of results to return"] = 10
+        ) -> str:
+            """Search through progress updates for specific keywords or agent names."""
+            try:
+                # This would typically search through stored progress updates
+                # For now, we'll search through recent runs and threads
+                
+                results = []
+                
+                # Search recent runs
+                recent_runs = self.list_runs(limit=50)
+                for run in recent_runs:
+                    metadata = run.get('metadata', {})
+                    agent_name = metadata.get('agent_name', '')
+                    
+                    if (keyword.lower() in agent_name.lower() or 
+                        keyword.lower() in run.get('status', '').lower() or
+                        keyword.lower() in str(metadata).lower()):
+                        
+                        results.append({
+                            'type': 'run',
+                            'id': run['run_id'][:8] + '...',
+                            'agent': agent_name,
+                            'status': run['status'],
+                            'timestamp': run['created_at'],
+                            'details': f"Run {run['run_id'][:8]}... on {agent_name}: {run['status']}"
+                        })
+                
+                # Search active threads
+                active_threads = self.get_active_threads()
+                for thread_id, thread_info in active_threads.items():
+                    if keyword.lower() in thread_id.lower() or keyword.lower() in str(thread_info).lower():
+                        results.append({
+                            'type': 'thread',
+                            'id': thread_id[:8] + '...',
+                            'agent': 'multiple',
+                            'status': 'active' if thread_info.get('is_active') else 'inactive',
+                            'timestamp': thread_info.get('last_updated', 'N/A'),
+                            'details': f"Thread {thread_id[:8]}...: {thread_info.get('conversation_length', 0)} messages"
+                        })
+                
+                # Sort by timestamp (most recent first)
+                results.sort(key=lambda x: x['timestamp'], reverse=True)
+                results = results[:limit]
+                
+                if not results:
+                    return f"No progress updates found matching keyword: '{keyword}'"
+                
+                report = f"Progress Search Results for '{keyword}' ({len(results)} found):
+                for result in results:
+                    report += f"[{result['type'].upper()}] {result['details']} - {result['timestamp']}
+                
+                return report
+                
+            except Exception as e:
+                return f"Error searching progress: {str(e)}"
+        
+        @tool(name="get_system_health", description="Get overall system health and performance metrics")
+        def get_system_health() -> str:
+            """Get system health metrics and performance indicators."""
+            try:
+                health_report = "=== SYSTEM HEALTH REPORT ===
+                
+                # Check SDK client connectivity
+                client_status = "Connected" if self.sync_client else "Disconnected"
+                health_report += f"SDK Client: {client_status}
+                
+                # Check remote graph connections
+                total_agents = len(self.remote_agents_config)
+                connected_agents = 0
+                
+                for agent_name in self.remote_agents_config.keys():
+                    status = self.get_remote_graph_status(agent_name)
+                    if status['status'] == 'connected':
+                        connected_agents += 1
+                
+                health_report += f"Agent Connectivity: {connected_agents}/{total_agents} agents connected
+                
+                # Get recent activity metrics
+                recent_runs = self.list_runs(limit=100)
+                
+                # Count runs by status
+                status_counts = {}
+                for run in recent_runs:
+                    status = run['status']
+                    status_counts[status] = status_counts.get(status, 0) + 1
+                
+                health_report += f"
+                for status, count in status_counts.items():
+                    health_report += f"  - {status}: {count}
+                
+                # Calculate success rate
+                total_completed = status_counts.get('success', 0) + status_counts.get('error', 0)
+                if total_completed > 0:
+                    success_rate = (status_counts.get('success', 0) / total_completed) * 100
+                    health_report += f"
+                
+                # System recommendations
+                health_report += "
+                if connected_agents < total_agents:
+                    health_report += f"  - Check connectivity for {total_agents - connected_agents} disconnected agents
+                if not self.sync_client:
+                    health_report += "  - SDK client not initialized - check API key and configuration
+                if status_counts.get('error', 0) > status_counts.get('success', 0):
+                    health_report += "  - High error rate detected - investigate agent issues
+                
+                if connected_agents == total_agents and self.sync_client:
+                    health_report += "  - System operating normally
+                
+                return health_report
+                
+            except Exception as e:
+                return f"Error getting system health: {str(e)}"
+        
+        return [get_overall_progress, query_agent_status, search_progress_by_keyword, get_system_health]
+    
+    def _create_cancellation_and_interrupt_tools(self):
+        """Create tools for agent cancellation and interrupt handling."""
+        
+        @tool(name="cancel_agent_run", description="Cancel a specific running agent by run ID")
+        def cancel_agent_run(
+            run_id: Annotated[str, "The run ID of the agent to cancel"]
+        ) -> str:
+            """Cancel a specific running agent using RunsClient.cancel()."""
+            try:
+                result = self.cancel_run(run_id)
+                return f"Successfully cancelled run {run_id}. Status: {result['status']}"
+            except Exception as e:
+                return f"Error cancelling run {run_id}: {str(e)}"
+        
+        @tool(name="cancel_all_active_runs", description="Cancel all currently active runs")
+        def cancel_all_active_runs() -> str:
+            """Cancel all currently active runs."""
+            try:
+                active_runs = self.monitor_active_runs()
+                if not active_runs:
+                    return "No active runs to cancel."
+                
+                cancelled_count = 0
+                failed_count = 0
+                results = []
+                
+                for run_id, run_info in active_runs.items():
+                    try:
+                        self.cancel_run(run_id)
+                        cancelled_count += 1
+                        agent_name = run_info.get('agent_name', 'unknown')
+                        results.append(f"✓ Cancelled {run_id[:8]}... ({agent_name})")
+                    except Exception as e:
+                        failed_count += 1
+                        results.append(f"✗ Failed to cancel {run_id[:8]}...: {str(e)}")
+                
+                summary = f"Cancellation Summary: {cancelled_count} successful, {failed_count} failed
+                return summary + "
+                
+            except Exception as e:
+                return f"Error cancelling active runs: {str(e)}"
+        
+        @tool(name="interrupt_agent_for_input", description="Interrupt an agent to request human input")
+        def interrupt_agent_for_input(
+            message: Annotated[str, "Message to display when interrupting for input"],
+            state: Annotated[AgentManagementState, InjectedState] = None
+        ) -> str:
+            """Interrupt the current execution to request human input."""
+            try:
+                # Use LangGraph's interrupt function to pause execution
+                from langgraph.constants import interrupt
+                
+                # Update state with interrupt information
+                if state:
+                    updated_state = state.copy()
+                    
+                    # Add progress update for interrupt
+                    progress_update = {
+                        "timestamp": datetime.now().isoformat(),
+                        "event": "agent_interrupted",
+                        "message": message,
+                        "details": {"awaiting_human_input": True}
+                    }
+                    
+                    progress_updates = updated_state.get("progress_updates", [])
+                    progress_updates.append(progress_update)
+                    updated_state["progress_updates"] = progress_updates
+                    updated_state["current_operation"] = "awaiting_human_input"
+                
+                # Trigger the interrupt
+                interrupt(message)
+                
+                return f"Agent execution interrupted. Message: {message}"
+                
+            except Exception as e:
+                return f"Error interrupting agent: {str(e)}"
+        
+        @tool(name="emergency_stop_all", description="Emergency stop all agents and operations")
+        def emergency_stop_all() -> str:
+            """Emergency stop all agents and operations."""
+            try:
+                results = []
+                
+                # Cancel all active runs
+                active_runs = self.monitor_active_runs()
+                cancelled_runs = 0
+                
+                for run_id in active_runs.keys():
+                    try:
+                        self.cancel_run(run_id)
+                        cancelled_runs += 1
+                    except Exception as e:
+                        results.append(f"Failed to cancel run {run_id[:8]}...: {str(e)}")
+                
+                results.insert(0, f"Emergency stop executed: {cancelled_runs} runs cancelled")
+                
+                # Add system status check
+                try:
+                    remaining_active = self.monitor_active_runs()
+                    if remaining_active:
+                        results.append(f"Warning: {len(remaining_active)} runs still active after emergency stop")
+                    else:
+                        results.append("All runs successfully stopped")
+                except Exception as e:
+                    results.append(f"Could not verify stop status: {str(e)}")
+                
+                return "
+                
+            except Exception as e:
+                return f"Error during emergency stop: {str(e)}"
+        
+        return [cancel_agent_run, cancel_all_active_runs, interrupt_agent_for_input, emergency_stop_all]
+    
+    def interrupt_current_execution(self, message: str = "Execution interrupted for human input"):
+        """Interrupt the current execution using LangGraph's interrupt function."""
+        try:
+            from langgraph.constants import interrupt
+            interrupt(message)
+            print(f"Execution interrupted: {message}")
+        except Exception as e:
+            print(f"Error interrupting execution: {e}")
+            raise
+    
+    def cancel_agent_by_name(self, agent_name: str) -> Dict[str, Any]:
+        """Cancel all runs for a specific agent by name."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot cancel agent runs.")
+        
+        try:
+            # Get recent runs for this agent
+            recent_runs = self.list_runs(limit=50)
+            agent_runs = [run for run in recent_runs 
+                         if run.get('metadata', {}).get('agent_name') == agent_name
+                         and run['status'] in ['pending', 'running']]
+            
+            if not agent_runs:
+                return {
+                    "agent_name": agent_name,
+                    "cancelled_runs": 0,
+                    "message": f"No active runs found for agent {agent_name}"
+                }
+            
+            cancelled_runs = []
+            failed_cancellations = []
+            
+            for run in agent_runs:
+                try:
+                    self.cancel_run(run['run_id'])
+                    cancelled_runs.append(run['run_id'])
+                except Exception as e:
+                    failed_cancellations.append({
+                        "run_id": run['run_id'],
+                        "error": str(e)
+                    })
+            
+            return {
+                "agent_name": agent_name,
+                "cancelled_runs": len(cancelled_runs),
+                "failed_cancellations": len(failed_cancellations),
+                "cancelled_run_ids": cancelled_runs,
+                "failures": failed_cancellations,
+                "message": f"Cancelled {len(cancelled_runs)} runs for {agent_name}"
+            }
+            
+        except Exception as e:
+            print(f"Error cancelling runs for agent {agent_name}: {e}")
+            raise
+    
+    # Comprehensive Error Handling Methods
+    
+    def _handle_remote_communication_error(self, agent_name: str, operation: str, error: Exception) -> Dict[str, Any]:
+        """Handle remote agent communication failures with comprehensive error reporting."""
+        error_details = {
+            "error_type": "remote_communication_failure",
+            "agent_name": agent_name,
+            "operation": operation,
+            "timestamp": datetime.now().isoformat(),
+            "error_message": str(error),
+            "original_error_type": type(error).__name__
+        }
+        
+        # Log the error with appropriate level
+        logger.error(f"Remote communication failed for {agent_name} during {operation}: {error}")
+        
+        # Check for specific error types
+        if "timeout" in str(error).lower():
+            error_details["error_category"] = "timeout"
+            error_details["suggested_action"] = "Retry with increased timeout or check agent availability"
+        elif "authentication" in str(error).lower() or "unauthorized" in str(error).lower():
+            error_details["error_category"] = "authentication"
+            error_details["suggested_action"] = "Check API key and authentication credentials"
+        elif "connection" in str(error).lower() or "network" in str(error).lower():
+            error_details["error_category"] = "network"
+            error_details["suggested_action"] = "Check network connectivity and agent endpoint"
+        else:
+            error_details["error_category"] = "unknown"
+            error_details["suggested_action"] = "Check agent logs and system status"
+        
+        return error_details
+    
+    def _handle_timeout_scenario(self, operation: str, timeout_duration: int, agent_name: str = None) -> Dict[str, Any]:
+        """Handle timeout scenarios with appropriate fallback strategies."""
+        timeout_details = {
+            "error_type": "timeout",
+            "operation": operation,
+            "timeout_duration": timeout_duration,
+            "timestamp": datetime.now().isoformat(),
+            "agent_name": agent_name
+        }
+        
+        logger.warning(f"Operation '{operation}' timed out after {timeout_duration} seconds" + 
+                      (f" for agent {agent_name}" if agent_name else ""))
+        
+        # Determine fallback strategy based on operation type
+        if "invoke" in operation.lower():
+            timeout_details["fallback_strategy"] = "retry_with_increased_timeout"
+            timeout_details["suggested_timeout"] = timeout_duration * 2
+        elif "cancel" in operation.lower():
+            timeout_details["fallback_strategy"] = "force_termination"
+            timeout_details["suggested_action"] = "Consider emergency stop if critical"
+        elif "status" in operation.lower() or "monitor" in operation.lower():
+            timeout_details["fallback_strategy"] = "use_cached_data"
+            timeout_details["suggested_action"] = "Use last known status or default values"
+        else:
+            timeout_details["fallback_strategy"] = "graceful_degradation"
+            timeout_details["suggested_action"] = "Continue with limited functionality"
+        
+        return timeout_details
+    
+    def _handle_authentication_error(self, operation: str, error_details: str = None) -> Dict[str, Any]:
+        """Handle authentication failures with appropriate recovery strategies."""
+        auth_error = {
+            "error_type": "authentication_failure",
+            "operation": operation,
+            "timestamp": datetime.now().isoformat(),
+            "error_details": error_details or "Authentication credentials invalid or expired"
+        }
+        
+        logger.error(f"Authentication failed during {operation}: {error_details}")
+        
+        # Determine recovery strategy
+        if self.api_key:
+            auth_error["recovery_strategy"] = "refresh_credentials"
+            auth_error["suggested_action"] = "Verify API key validity and refresh if needed"
+        else:
+            auth_error["recovery_strategy"] = "configure_credentials"
+            auth_error["suggested_action"] = "Configure valid API key and authentication"
+        
+        # Check if we can attempt credential refresh
+        auth_error["can_retry"] = bool(self.api_key and self.platform_url)
+        
+        return auth_error
+    
+    def _create_error_recovery_tools(self):
+        """Create tools for error recovery and system diagnostics."""
+        
+        @tool(name="diagnose_system_errors", description="Diagnose and report system errors")
+        def diagnose_system_errors() -> str:
+            """Diagnose current system errors and provide recovery suggestions."""
+            try:
+                diagnostics = {
+                    "timestamp": datetime.now().isoformat(),
+                    "system_status": "checking",
+                    "issues_found": []
+                }
+                
+                # Check SDK client connectivity
+                if not self.sync_client:
+                    diagnostics["issues_found"].append({
+                        "issue": "SDK client not initialized",
+                        "severity": "critical",
+                        "recovery": "Initialize SDK client with valid credentials"
+                    })
+                
+                # Check remote graph connections
+                for agent_name in self.remote_agents_config.keys():
+                    try:
+                        status = self.get_remote_graph_status(agent_name)
+                        if status["status"] != "connected":
+                            diagnostics["issues_found"].append({
+                                "issue": f"Agent {agent_name} not connected",
+                                "severity": "high",
+                                "recovery": f"Check {agent_name} configuration and connectivity"
+                            })
+                    except Exception as e:
+                        diagnostics["issues_found"].append({
+                            "issue": f"Cannot check {agent_name} status: {str(e)}",
+                            "severity": "medium",
+                            "recovery": "Investigate agent status checking mechanism"
+                        })
+                
+                # Check for recent errors in runs
+                try:
+                    recent_runs = self.list_runs(limit=20)
+                    error_runs = [run for run in recent_runs if run["status"] == "error"]
+                    if len(error_runs) > len(recent_runs) * 0.3:  # More than 30% error rate
+                        diagnostics["issues_found"].append({
+                            "issue": f"High error rate: {len(error_runs)}/{len(recent_runs)} runs failed",
+                            "severity": "high",
+                            "recovery": "Investigate common failure patterns and agent health"
+                        })
+                except Exception as e:
+                    diagnostics["issues_found"].append({
+                        "issue": f"Cannot check run history: {str(e)}",
+                        "severity": "medium",
+                        "recovery": "Check SDK client and platform connectivity"
+                    })
+                
+                # Generate report
+                if not diagnostics["issues_found"]:
+                    return "System diagnostics: No critical issues found. System appears healthy."
+                
+                report = f"System Diagnostics Report ({len(diagnostics['issues_found'])} issues found):
+                for i, issue in enumerate(diagnostics["issues_found"], 1):
+                    report += f"{i}. [{issue['severity'].upper()}] {issue['issue']}
+                    report += f"   Recovery: {issue['recovery']}
+                
+                return report
+                
+            except Exception as e:
+                return f"Error during system diagnostics: {str(e)}"
+        
+        @tool(name="attempt_error_recovery", description="Attempt automatic error recovery")
+        def attempt_error_recovery() -> str:
+            """Attempt to automatically recover from common errors."""
+            try:
+                recovery_actions = []
+                
+                # Attempt to reinitialize SDK clients
+                if not self.sync_client and self.api_key:
+                    try:
+                        self._initialize_sdk_clients()
+                        recovery_actions.append("✓ SDK client reinitialized successfully")
+                    except Exception as e:
+                        recovery_actions.append(f"✗ Failed to reinitialize SDK client: {str(e)}")
+                
+                # Attempt to reconnect remote graphs
+                for agent_name in self.remote_agents_config.keys():
+                    try:
+                        status = self.get_remote_graph_status(agent_name)
+                        if status["status"] != "connected":
+                            # Attempt to reinitialize the remote graph
+                            config = self.remote_agents_config[agent_name]
+                            self._initialize_single_remote_graph(agent_name, config)
+                            recovery_actions.append(f"✓ Reconnected to {agent_name}")
+                    except Exception as e:
+                        recovery_actions.append(f"✗ Failed to reconnect {agent_name}: {str(e)}")
+                
+                if not recovery_actions:
+                    return "No recovery actions needed - system appears healthy."
+                
+                return "Error Recovery Results:
+                
+            except Exception as e:
+                return f"Error during recovery attempt: {str(e)}"
+        
+        return [diagnose_system_errors, attempt_error_recovery]
+    
+    def _initialize_single_remote_graph(self, agent_name: str, config: Dict[str, Any]):
+        """Initialize a single remote graph with comprehensive error handling."""
+        try:
+            if self.sync_client:
+                # Use SDK client for initialization
+                remote_graph = RemoteGraph(
+                    name=config["graph_name"],
+                    sync_client=self.sync_client
+                )
+            else:
+                # Use URL-based initialization
+                remote_graph = RemoteGraph(
+                    name=config["graph_name"],
+                    api_key=self.api_key,
+                    url=self.platform_url
+                )
+            
+            # Test the connection
+            test_result = remote_graph.invoke({"messages": [HumanMessage(content="test")]})
+            
+            # Create enhanced wrapper
+            enhanced_graph = self._create_enhanced_remote_graph(agent_name, remote_graph)
+            self.remote_graphs[agent_name] = enhanced_graph
+            
+            logger.info(f"Successfully initialized remote graph for {agent_name}")
+            
+        except Exception as e:
+            error_details = self._handle_remote_communication_error(agent_name, "initialization", e)
+            logger.error(f"Remote graph initialization failed: {error_details}")
+            
+            # Create fallback
+            self.remote_graphs[agent_name] = self._create_fallback_remote_graph(agent_name, config)
+            raise RemoteGraphInitializationError(agent_name, str(e), e)
+    
+    def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
+        """Create a handoff tool for delegating tasks to a specific remote agent."""
+        
+        @tool(
+            name=f"delegate_to_{agent_name}",
+            description=f"Delegate task to {agent_name}. {agent_config['description']}. "
+                       f"Capabilities: {', '.join(agent_config['capabilities'])}"
+        )
+        def handoff_tool(
+            task_description: Annotated[str, "Clear description of the task to delegate"],
+            priority: Annotated[str, "Task priority: low, medium, high"] = "medium",
+            state: Annotated[AgentManagementState, InjectedState] = None,
+            tool_call_id: Annotated[str, InjectedToolCallId] = None,
+        ) -> Command:
+            """Delegate a task to a remote agent."""
+            
+            # Create task message for the remote agent
+            task_message = HumanMessage(content=task_description)
+            
+            # Generate unique run ID for tracking
+            run_id = str(uuid.uuid4())
+            
+            # Update state with new run tracking
+            updated_state = state.copy() if state else {}
+            if "active_runs" not in updated_state:
+                updated_state["active_runs"] = {}
+            
+            updated_state["active_runs"][run_id] = {
+                "agent_name": agent_name,
+                "task_description": task_description,
+                "priority": priority,
+                "status": "delegated",
+                "created_at": datetime.now().isoformat(),
+                "tool_call_id": tool_call_id
+            }
+            
+            # Add progress update
+            if "progress_updates" not in updated_state:
+                updated_state["progress_updates"] = []
+            
+            updated_state["progress_updates"].append({
+                "timestamp": datetime.now().isoformat(),
+                "event": "task_delegated",
+                "agent": agent_name,
+                "run_id": run_id,
+                "message": f"Delegated task to {agent_name}: {task_description[:100]}..."
+            })
+            
+            # Create tool response message
+            tool_message = {
+                "role": "tool",
+                "content": f"Task delegated to {agent_name} (Run ID: {run_id}). "
+                          f"The agent will process: {task_description}",
+                "name": f"delegate_to_{agent_name}",
+                "tool_call_id": tool_call_id,
+            }
+            
+            # Update messages
+            updated_messages = (state.get("messages", []) if state else []) + [tool_message]
+            updated_state["messages"] = updated_messages
+            updated_state["current_operation"] = f"delegated_to_{agent_name}"
+            
+            # Use Send to pass specific task to remote agent
+            agent_input = {
+                "messages": [task_message],
+                "run_id": run_id,
+                "priority": priority
+            }
+            
+            return Command(
+                goto=[Send(agent_name, agent_input)],
+                update=updated_state,
+                graph=Command.PARENT,
+            )
+        
+        return handoff_tool
+    
+    def _build_management_graph(self) -> StateGraph:
+        """Build the main management graph with supervisor pattern."""
+        
+        # Create handoff tools for each remote agent
+        handoff_tools = []
+        for agent_name, agent_config in self.remote_agents_config.items():
+            tool = self._create_handoff_tool(agent_name, agent_config)
+            handoff_tools.append(tool)
+        
+        # Add thread and run management tools
+        thread_management_tools = self._create_thread_management_tools()
+        
+        # Add progress monitoring tools
+        progress_monitoring_tools = self._create_progress_monitoring_tools()
+        
+        # Add cancellation and interrupt tools
+        cancellation_interrupt_tools = self._create_cancellation_and_interrupt_tools()
+        
+        # Add error recovery tools
+        error_recovery_tools = self._create_error_recovery_tools()
+        all_tools = handoff_tools + thread_management_tools + progress_monitoring_tools + cancellation_interrupt_tools + error_recovery_tools
+        
+        # Create the supervisor agent with all tools
+        supervisor_agent = create_react_agent(
+            model=self.llm,
+            tools=all_tools,
+            prompt=self._get_supervisor_prompt(),
+            name="supervisor"
+        )
+        
+        # Build the state graph
+        graph = StateGraph(AgentManagementState)
+        
+        # Add supervisor node
+        graph.add_node("supervisor", supervisor_agent)
+        
+        # Add remote agent nodes for receiving delegated tasks
+        for agent_name in self.remote_agents_config.keys():
+            # Create remote agent node that handles delegated tasks
+            remote_agent_node = self._create_remote_agent_node(agent_name)
+            graph.add_node(agent_name, remote_agent_node)
+        
+        # Set up edges
+        graph.add_edge(START, "supervisor")
+        
+        # Add conditional edges from supervisor to remote agents
+        # The handoff tools will use Command.goto with Send() to route to specific agents
+        for agent_name in self.remote_agents_config.keys():
+            graph.add_edge(agent_name, "supervisor")  # Remote agents return to supervisor
+        
+        return graph
+    
+    def _create_remote_agent_node(self, agent_name: str):
+        """Create a node for a remote agent that can receive delegated tasks."""
+        
+        def remote_agent_node(state: AgentManagementState) -> AgentManagementState:
+            """Handle delegated tasks for a remote agent."""
+            
+            # Get the remote graph for this agent
+            if agent_name in self.remote_graphs:
+                remote_graph = self.remote_graphs[agent_name]
+                
+                try:
+                    # Extract the task from the state
+                    messages = state.get("messages", [])
+                    if messages:
+                        # Use the remote graph to process the task
+                        result = remote_graph({"messages": messages})
+                        
+                        # Update state with the response
+                        updated_state = state.copy()
+                        if "messages" in result:
+                            updated_state["messages"] = result["messages"]
+                        
+                        # Add progress update
+                        progress_update = {
+                            "timestamp": datetime.now().isoformat(),
+                            "event": "task_completed",
+                            "agent": agent_name,
+                            "message": f"Task completed by {agent_name}",
+                            "details": {"response_received": True}
+                        }
+                        
+                        progress_updates = updated_state.get("progress_updates", [])
+                        progress_updates.append(progress_update)
+                        updated_state["progress_updates"] = progress_updates
+                        
+                        # Update current operation
+                        updated_state["current_operation"] = f"completed_by_{agent_name}"
+                        
+                        return updated_state
+                
+                except Exception as e:
+                    print(f"Error in remote agent {agent_name}: {e}")
+                    # Return error state
+                    error_state = state.copy()
+                    error_message = AIMessage(
+                        content=f"Error processing task with {agent_name}: {str(e)}"
+                    )
+                    error_state["messages"] = state.get("messages", []) + [error_message]
+                    
+                    # Add error progress update
+                    progress_update = {
+                        "timestamp": datetime.now().isoformat(),
+                        "event": "task_error",
+                        "agent": agent_name,
+                        "message": f"Error in {agent_name}: {str(e)}",
+                        "details": {"error": True}
+                    }
+                    
+                    progress_updates = error_state.get("progress_updates", [])
+                    progress_updates.append(progress_update)
+                    error_state["progress_updates"] = progress_updates
+                    
+                    return error_state
+            
+            # Fallback if remote graph not available
+            fallback_state = state.copy()
+            fallback_message = AIMessage(
+                content=f"Remote agent {agent_name} is not available. Task could not be processed."
+            )
+            fallback_state["messages"] = state.get("messages", []) + [fallback_message]
+            
+            return fallback_state
+        
+        return remote_agent_node
+
+# Create the main app entry point for LangGraph deployment
+def create_app():
+    """Create and return the compiled management agent graph."""
+    # Initialize the MultiAgentManager with default configuration
+    manager = MultiAgentManager()
+    
+    # Build and compile the management graph
+    graph = manager._build_management_graph()
+    
+    # Compile the graph with checkpointing for persistence
+    from langgraph.checkpoint.memory import MemorySaver
+    checkpointer = MemorySaver()
+    
+    app = graph.compile(checkpointer=checkpointer)
+    return app
+
+# Create the app instance for deployment
+app = create_app()
+
+# For local development and testing
+if __name__ == "__main__":
+    print("Multi-Agent Management System initialized successfully!")
+    print("Use LangGraph Studio or the LangGraph CLI to interact with the agent.")
+
+
+
