@@ -1203,7 +1203,10 @@ class MultiAgentManager:
         
         # Add progress monitoring tools
         progress_monitoring_tools = self._create_progress_monitoring_tools()
-        all_tools = handoff_tools + thread_management_tools + progress_monitoring_tools
+        
+        # Add cancellation and interrupt tools
+        cancellation_interrupt_tools = self._create_cancellation_and_interrupt_tools()
+        all_tools = handoff_tools + thread_management_tools + progress_monitoring_tools + cancellation_interrupt_tools
         
         # Create the supervisor agent with all tools
         supervisor_agent = create_react_agent(
