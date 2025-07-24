@@ -149,7 +149,7 @@ async function summarizeConversation(state: State): Promise<Partial<State>> {
   // Create summarization prompt
   let summaryPrompt: string;
   if (summary && summary.trim()) {
-    summaryPrompt = `This is the current summary of the conversation: ${summary}
+    summaryPrompt = `This is the current summary of the conversation: ${summary}\n\nExtend and update this summary by incorporating the new messages above. Keep the summary comprehensive but concise.`;
   } else {
     summaryPrompt = "Create a comprehensive summary of the conversation above, capturing the key topics, decisions, and important information discussed.";
   }
