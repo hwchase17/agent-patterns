@@ -239,3 +239,7 @@ def main():
     print("   2. Set up proper API keys and configuration")
     print("   3. Invoke the compiled graph: two_stage_agent.graph.invoke(initial_state)")
     print("   4. Handle real responses and state updates")
+
+
+if __name__ == "__main__":
+    main()
