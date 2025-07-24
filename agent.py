@@ -314,6 +314,199 @@ class MultiAgentManager:
             }
         return agents_status
     
+    # Run Management Methods using RunsClient
+    
+    def create_run(self, agent_name: str, input_data: Dict[str, Any], 
+                   thread_id: Optional[str] = None, priority: str = "medium",
+                   metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create a new run for a remote agent using RunsClient."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot create runs.")
+        
+        if agent_name not in self.remote_agents_config:
+            raise ValueError(f"Agent {agent_name} not configured")
+        
+        try:
+            # Get the assistant ID for the agent (assuming it matches the graph name)
+            assistant_id = self.remote_agents_config[agent_name]["graph_name"]
+            
+            # Prepare run metadata
+            run_metadata = {
+                "agent_name": agent_name,
+                "priority": priority,
+                "created_by": "management_agent",
+                **(metadata or {})
+            }
+            
+            # Create the run
+            run = self.sync_client.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                input=input_data,
+                metadata=run_metadata
+            )
+            
+            print(f"Created run {run.run_id} for {agent_name} on thread {run.thread_id}")
+            return {
+                "run_id": run.run_id,
+                "thread_id": run.thread_id,
+                "assistant_id": run.assistant_id,
+                "status": run.status,
+                "created_at": run.created_at,
+                "agent_name": agent_name
+            }
+            
+        except Exception as e:
+            print(f"Error creating run for {agent_name}: {e}")
+            raise
+    
+    def get_run(self, run_id: str) -> Dict[str, Any]:
+        """Get details of a specific run using RunsClient."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot get run details.")
+        
+        try:
+            run = self.sync_client.runs.get(run_id)
+            return {
+                "run_id": run.run_id,
+                "thread_id": run.thread_id,
+                "assistant_id": run.assistant_id,
+                "status": run.status,
+                "created_at": run.created_at,
+                "updated_at": run.updated_at,
+                "metadata": run.metadata
+            }
+        except Exception as e:
+            print(f"Error getting run {run_id}: {e}")
+            raise
+    
+    def list_runs(self, thread_id: Optional[str] = None, 
+                  limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+        """List runs using RunsClient with optional filtering."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot list runs.")
+        
+        try:
+            runs = self.sync_client.runs.list(
+                thread_id=thread_id,
+                limit=limit,
+                offset=offset
+            )
+            
+            return [
+                {
+                    "run_id": run.run_id,
+                    "thread_id": run.thread_id,
+                    "assistant_id": run.assistant_id,
+                    "status": run.status,
+                    "created_at": run.created_at,
+                    "updated_at": run.updated_at,
+                    "metadata": run.metadata
+                }
+                for run in runs
+            ]
+        except Exception as e:
+            print(f"Error listing runs: {e}")
+            raise
+    
+    def cancel_run(self, run_id: str) -> Dict[str, Any]:
+        """Cancel a running agent using RunsClient.cancel()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot cancel run.")
+        
+        try:
+            # Cancel the run
+            self.sync_client.runs.cancel(run_id)
+            
+            # Get updated run status
+            run = self.sync_client.runs.get(run_id)
+            
+            print(f"Cancelled run {run_id}. Status: {run.status}")
+            return {
+                "run_id": run.run_id,
+                "status": run.status,
+                "updated_at": run.updated_at,
+                "cancelled": True
+            }
+        except Exception as e:
+            print(f"Error cancelling run {run_id}: {e}")
+            raise
+    
+    def wait_for_run(self, run_id: str, timeout: Optional[int] = None) -> Dict[str, Any]:
+        """Wait for a run to complete using RunsClient.wait()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot wait for run.")
+        
+        try:
+            # Wait for the run to complete
+            run = self.sync_client.runs.wait(run_id, timeout=timeout)
+            
+            print(f"Run {run_id} completed with status: {run.status}")
+            return {
+                "run_id": run.run_id,
+                "thread_id": run.thread_id,
+                "status": run.status,
+                "updated_at": run.updated_at,
+                "completed": run.status in ["success", "error", "timeout", "interrupted"]
+            }
+        except Exception as e:
+            print(f"Error waiting for run {run_id}: {e}")
+            raise
+    
+    def stream_run(self, run_id: str):
+        """Stream run updates using RunsClient.join_stream()."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot stream run.")
+        
+        try:
+            # Stream run updates
+            for chunk in self.sync_client.runs.join_stream(run_id):
+                yield {
+                    "run_id": run_id,
+                    "event": chunk.event,
+                    "data": chunk.data,
+                    "timestamp": datetime.now().isoformat()
+                }
+        except Exception as e:
+            print(f"Error streaming run {run_id}: {e}")
+            raise
+    
+    def get_run_status(self, run_id: str) -> str:
+        """Get the current status of a run using RunStatus enum states."""
+        try:
+            run = self.get_run(run_id)
+            return run["status"]
+        except Exception as e:
+            print(f"Error getting run status for {run_id}: {e}")
+            return "unknown"
+    
+    def monitor_active_runs(self) -> Dict[str, Dict[str, Any]]:
+        """Monitor all active runs and return their current status."""
+        if not self.sync_client:
+            return {}
+        
+        try:
+            # Get recent runs (active ones should be at the top)
+            runs = self.list_runs(limit=50)
+            
+            active_runs = {}
+            for run in runs:
+                if run["status"] in ["pending", "running"]:
+                    active_runs[run["run_id"]] = {
+                        "run_id": run["run_id"],
+                        "thread_id": run["thread_id"],
+                        "assistant_id": run["assistant_id"],
+                        "status": run["status"],
+                        "created_at": run["created_at"],
+                        "updated_at": run["updated_at"],
+                        "agent_name": run["metadata"].get("agent_name", "unknown") if run["metadata"] else "unknown"
+                    }
+            
+            return active_runs
+        except Exception as e:
+            print(f"Error monitoring active runs: {e}")
+            return {}
+    
     def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
         """Create a handoff tool for delegating tasks to a specific remote agent."""
         
@@ -398,6 +591,7 @@ class MultiAgentManager:
         handoff_tools = []
         for agent_name, agent_config in self.remote_agents_config.items():
             tool = self._create_handoff_tool(agent_name, agent_config)
+
 
 
 
