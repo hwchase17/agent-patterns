@@ -1,0 +1,200 @@
+"""
+Multi-Agent Management Chat System
+
+This module implements a management agent that can coordinate and monitor
+multiple remote agents deployed on LangGraph Platform. It provides capabilities
+for task delegation, progress monitoring, and agent control.
+"""
+
+import os
+import uuid
+from typing import Annotated, Dict, List, Optional, Any
+from datetime import datetime
+
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.tools import tool, InjectedToolCallId
+from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.prebuilt import InjectedState, create_react_agent
+from langgraph.types import Command, Send
+from langgraph.pregel.remote import RemoteGraph
+from langgraph_sdk import get_client, get_sync_client
+from langgraph_sdk.schema import RunStatus, ThreadStatus
+
+
+class AgentManagementState(MessagesState):
+    """Extended state for agent management with tracking capabilities."""
+    
+    # Track active remote agents and their runs
+    active_runs: Dict[str, Dict[str, Any]] = {}
+    
+    # Track agent configurations
+    remote_agents: Dict[str, Dict[str, Any]] = {}
+    
+    # Current operation context
+    current_operation: Optional[str] = None
+    
+    # Progress tracking
+    progress_updates: List[Dict[str, Any]] = []
+
+
+class MultiAgentManager:
+    """
+    Multi-Agent Management System
+    
+    Coordinates multiple remote agents deployed on LangGraph Platform,
+    providing task delegation, monitoring, and control capabilities.
+    """
+    
+    def __init__(
+        self,
+        platform_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        remote_agents_config: Optional[Dict[str, Dict[str, Any]]] = None
+    ):
+        """
+        Initialize the Multi-Agent Manager.
+        
+        Args:
+            platform_url: URL of the LangGraph Platform deployment
+            api_key: LangSmith API key for authentication
+            remote_agents_config: Configuration for remote agents
+        """
+        self.platform_url = platform_url or os.getenv("LANGGRAPH_PLATFORM_URL")
+        self.api_key = api_key or os.getenv("LANGSMITH_API_KEY")
+        
+        # Initialize SDK clients
+        if self.platform_url:
+            self.client = get_client(url=self.platform_url, api_key=self.api_key)
+            self.sync_client = get_sync_client(url=self.platform_url, api_key=self.api_key)
+        else:
+            self.client = None
+            self.sync_client = None
+        
+        # Default remote agents configuration
+        self.remote_agents_config = remote_agents_config or {
+            "research_agent": {
+                "graph_name": "research_agent",
+                "description": "Handles research and information gathering tasks",
+                "capabilities": ["web_search", "data_analysis", "fact_checking"]
+            },
+            "data_agent": {
+                "graph_name": "data_agent", 
+                "description": "Processes and analyzes data",
+                "capabilities": ["data_processing", "calculations", "statistics"]
+            },
+            "writing_agent": {
+                "graph_name": "writing_agent",
+                "description": "Handles content creation and writing tasks",
+                "capabilities": ["content_writing", "summarization", "editing"]
+            }
+        }
+        
+        # Initialize remote graph connections
+        self.remote_graphs = {}
+        self._initialize_remote_graphs()
+        
+        # Build the management graph
+        self.graph = self._build_management_graph()
+    
+    def _initialize_remote_graphs(self):
+        """Initialize RemoteGraph connections for each configured agent."""
+        if not self.platform_url:
+            print("Warning: No platform URL provided. Remote graphs will not be initialized.")
+            return
+            
+        for agent_name, config in self.remote_agents_config.items():
+            try:
+                remote_graph = RemoteGraph(
+                    name=config["graph_name"],
+                    url=self.platform_url,
+                    api_key=self.api_key
+                )
+                self.remote_graphs[agent_name] = remote_graph
+                print(f"Initialized remote graph for {agent_name}")
+            except Exception as e:
+                print(f"Failed to initialize remote graph for {agent_name}: {e}")
+    
+    def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
+        """Create a handoff tool for delegating tasks to a specific remote agent."""
+        
+        @tool(
+            name=f"delegate_to_{agent_name}",
+            description=f"Delegate task to {agent_name}. {agent_config['description']}. "
+                       f"Capabilities: {', '.join(agent_config['capabilities'])}"
+        )
+        def handoff_tool(
+            task_description: Annotated[str, "Clear description of the task to delegate"],
+            priority: Annotated[str, "Task priority: low, medium, high"] = "medium",
+            state: Annotated[AgentManagementState, InjectedState] = None,
+            tool_call_id: Annotated[str, InjectedToolCallId] = None,
+        ) -> Command:
+            """Delegate a task to a remote agent."""
+            
+            # Create task message for the remote agent
+            task_message = HumanMessage(content=task_description)
+            
+            # Generate unique run ID for tracking
+            run_id = str(uuid.uuid4())
+            
+            # Update state with new run tracking
+            updated_state = state.copy() if state else {}
+            if "active_runs" not in updated_state:
+                updated_state["active_runs"] = {}
+            
+            updated_state["active_runs"][run_id] = {
+                "agent_name": agent_name,
+                "task_description": task_description,
+                "priority": priority,
+                "status": "delegated",
+                "created_at": datetime.now().isoformat(),
+                "tool_call_id": tool_call_id
+            }
+            
+            # Add progress update
+            if "progress_updates" not in updated_state:
+                updated_state["progress_updates"] = []
+            
+            updated_state["progress_updates"].append({
+                "timestamp": datetime.now().isoformat(),
+                "event": "task_delegated",
+                "agent": agent_name,
+                "run_id": run_id,
+                "message": f"Delegated task to {agent_name}: {task_description[:100]}..."
+            })
+            
+            # Create tool response message
+            tool_message = {
+                "role": "tool",
+                "content": f"Task delegated to {agent_name} (Run ID: {run_id}). "
+                          f"The agent will process: {task_description}",
+                "name": f"delegate_to_{agent_name}",
+                "tool_call_id": tool_call_id,
+            }
+            
+            # Update messages
+            updated_messages = (state.get("messages", []) if state else []) + [tool_message]
+            updated_state["messages"] = updated_messages
+            updated_state["current_operation"] = f"delegated_to_{agent_name}"
+            
+            # Use Send to pass specific task to remote agent
+            agent_input = {
+                "messages": [task_message],
+                "run_id": run_id,
+                "priority": priority
+            }
+            
+            return Command(
+                goto=[Send(agent_name, agent_input)],
+                update=updated_state,
+                graph=Command.PARENT,
+            )
+        
+        return handoff_tool
+    
+    def _build_management_graph(self) -> StateGraph:
+        """Build the main management graph with supervisor pattern."""
+        
+        # Create handoff tools for each remote agent
+        handoff_tools = []
+        for agent_name, agent_config in self.remote_agents_config.items():
+            tool = self._create_handoff_tool(agent_name, agent_config)
