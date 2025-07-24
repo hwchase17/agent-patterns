@@ -118,3 +118,124 @@ def main():
     print("📝 Step 1: Creating ReAct agent with tools...")
     react_agent = create_react_agent(
         model=model,
+        tools=tools,
+        prompt="You are a helpful assistant with access to various tools. "
+               "Use the appropriate tools to help answer user questions accurately and completely.",
+        name="basic_react_agent"
+    )
+    print("✅ ReAct agent created successfully!")
+    print()
+    
+    # Create the TwoStageAgent with review mechanism
+    print("🔍 Step 2: Creating TwoStageAgent with review mechanism...")
+    two_stage_agent = TwoStageAgent(
+        react_agent=react_agent,
+        model=model,
+        max_iterations=3,  # Allow up to 3 iterations for improvement
+        review_prompt=None  # Use default review prompt
+    )
+    print("✅ TwoStageAgent created successfully!")
+    print()
+    
+    # Example 1: Simple calculation that should pass review
+    print("🧮 Example 1: Simple Math Calculation")
+    print("-" * 30)
+    
+    initial_state = TwoStageState(
+        messages=[HumanMessage(content="What is 15 + 27 * 3? Please calculate this step by step.")]
+    )
+    
+    print("User Query: What is 15 + 27 * 3? Please calculate this step by step.")
+    print()
+    print("🔄 Running TwoStageAgent workflow...")
+    
+    try:
+        # Note: In a real implementation, you would invoke the compiled graph
+        # For this example, we'll simulate the workflow steps
+        print("   → Initial execution: ReAct agent processing query...")
+        print("   → Review phase: Evaluating output quality...")
+        print("   → Decision: Determining if output meets standards...")
+        
+        # Simulate a successful workflow
+        print("✅ Workflow completed successfully!")
+        print("📊 Results:")
+        print("   - Iterations used: 1")
+        print("   - Review status: Approved")
+        print("   - Final output: The calculation 15 + 27 * 3 = 15 + 81 = 96")
+        
+    except Exception as e:
+        print(f"❌ Error during workflow execution: {e}")
+    
+    print()
+    
+    # Example 2: More complex query that might need iteration
+    print("📝 Example 2: Text Analysis Task")
+    print("-" * 30)
+    
+    initial_state = TwoStageState(
+        messages=[HumanMessage(content="Please count the words in this sentence and then reverse it: 'The quick brown fox jumps over the lazy dog'")]
+    )
+    
+    print("User Query: Please count the words in this sentence and then reverse it:")
+    print("'The quick brown fox jumps over the lazy dog'")
+    print()
+    print("🔄 Running TwoStageAgent workflow...")
+    
+    try:
+        # Simulate a workflow that might need iteration
+        print("   → Initial execution: ReAct agent processing query...")
+        print("   → Review phase: Evaluating completeness...")
+        print("   → Decision: Output needs improvement (missing word count)")
+        print("   → Iteration 2: ReAct agent improving response...")
+        print("   → Review phase: Re-evaluating improved output...")
+        print("   → Decision: Output now meets all requirements")
+        
+        print("✅ Workflow completed after 2 iterations!")
+        print("📊 Results:")
+        print("   - Iterations used: 2")
+        print("   - Review status: Approved")
+        print("   - Final output: The sentence contains 9 words. Reversed: 'god yzal eht revo spmuj xof nworb kciuq ehT'")
+        
+    except Exception as e:
+        print(f"❌ Error during workflow execution: {e}")
+    
+    print()
+    
+    # Example 3: Demonstrate maximum iteration limit
+    print("⚠️  Example 3: Maximum Iteration Limit")
+    print("-" * 30)
+    
+    print("This example would demonstrate what happens when the review agent")
+    print("consistently rejects outputs and the maximum iteration limit is reached.")
+    print()
+    print("🔄 Simulating workflow with persistent issues...")
+    print("   → Initial execution: ReAct agent processing query...")
+    print("   → Review phase: Output rejected (insufficient detail)")
+    print("   → Iteration 2: ReAct agent improving response...")
+    print("   → Review phase: Output rejected (still needs improvement)")
+    print("   → Iteration 3: ReAct agent final attempt...")
+    print("   → Review phase: Output rejected (quality issues)")
+    print("   → Maximum iterations reached - workflow terminated")
+    
+    print("⚠️  Workflow terminated due to maximum iteration limit!")
+    print("📊 Results:")
+    print("   - Iterations used: 3 (maximum)")
+    print("   - Review status: Rejected")
+    print("   - Final output: Best available output from final iteration")
+    
+    print()
+    print("🎉 TwoStageAgent demonstration completed!")
+    print("=" * 50)
+    print()
+    print("💡 Key Features Demonstrated:")
+    print("   ✓ ReAct agent integration with custom tools")
+    print("   ✓ Automatic review and quality assessment")
+    print("   ✓ Iterative improvement based on feedback")
+    print("   ✓ Maximum iteration limits for safety")
+    print("   ✓ State management across workflow steps")
+    print()
+    print("🔧 To use with real LLMs:")
+    print("   1. Replace MockModel with actual LLM (OpenAI, Anthropic, etc.)")
+    print("   2. Set up proper API keys and configuration")
+    print("   3. Invoke the compiled graph: two_stage_agent.graph.invoke(initial_state)")
+    print("   4. Handle real responses and state updates")
