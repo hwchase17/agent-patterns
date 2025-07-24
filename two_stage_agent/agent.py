@@ -39,6 +39,69 @@ class TwoStageState(MessagesState):
     final_output: Optional[str] = None
 
 
+def create_review_agent(model: Any, custom_prompt: Optional[str] = None) -> Runnable:
+    """
+    Create a review agent using LangGraph's create_react_agent.
+    
+    The review agent is designed to evaluate outputs from other agents and provide
+    structured feedback indicating whether the result is acceptable or needs improvement.
+    
+    Args:
+        model: The language model to use for the review agent
+        custom_prompt: Optional custom prompt for the review agent
+        
+    Returns:
+        A configured review agent that returns structured ReviewResult feedback
+    """
+    
+    # Default comprehensive review prompt
+    default_prompt = """
+You are an expert quality reviewer and evaluator. Your role is to carefully assess outputs from other AI agents and determine whether they adequately address the user's request.
+
+## Evaluation Criteria:
+
+1. **Completeness**: Does the output fully answer the user's question or complete the requested task?
+2. **Accuracy**: Is the information provided accurate, factual, and well-reasoned?
+3. **Relevance**: Does the response directly address what was asked without unnecessary tangents?
+4. **Clarity**: Is the output clear, well-structured, and easy to understand?
+5. **Depth**: Does the response provide sufficient detail and context where appropriate?
+
+## Your Assessment Process:
+
+1. Read the output carefully and compare it against the original user request
+2. Evaluate each criterion above
+3. Make a binary decision: is this output acceptable as-is, or does it need improvement?
+4. If improvement is needed, provide specific, actionable feedback
+
+## Response Guidelines:
+
+- Set `is_acceptable` to `true` only if the output meets all criteria satisfactorily
+- Set `is_acceptable` to `false` if any significant issues are present
+- Provide constructive, specific feedback in the `feedback` field when rejecting
+- Include your confidence level (0.0 to 1.0) in your assessment
+- Be thorough but concise in your evaluation
+
+## Examples of Unacceptable Outputs:
+- Incomplete answers that don't fully address the question
+- Factually incorrect information
+- Vague or unclear responses
+- Responses that miss the main point of the request
+- Outputs with significant logical errors or inconsistencies
+
+Remember: Your goal is to ensure high-quality outputs while providing helpful guidance for improvement when needed.
+"""
+    
+    prompt = custom_prompt or default_prompt
+    
+    return create_react_agent(
+        model=model,
+        tools=[],  # Review agent focuses on evaluation, doesn't need external tools
+        prompt=prompt,
+        response_format=ReviewResult,
+        name="review_agent"
+    )
+
+
 class TwoStageAgent:
     """
     A generic two-stage agent that wraps any ReAct agent with a review mechanism.
@@ -69,29 +132,10 @@ class TwoStageAgent:
         self.model = model
         self.max_iterations = max_iterations
         
-        # Default review prompt
-        self.review_prompt = review_prompt or """
-You are a quality reviewer. Your job is to evaluate the output from another agent and determine if it adequately addresses the user's request.
-
-Evaluation criteria:
-1. Does the output directly answer the user's question or complete the requested task?
-2. Is the information accurate and well-reasoned?
-3. Is the response complete and not missing important details?
-4. Is the output clear and well-structured?
-
-If the output is acceptable, set is_acceptable to true.
-If the output needs improvement, set is_acceptable to false and provide specific feedback on what needs to be improved.
-
-Be constructive in your feedback and specific about what changes are needed.
-"""
-        
-        # Create the review agent
-        self.review_agent = create_react_agent(
-            model=self.model,
-            tools=[],  # Review agent doesn't need tools, just evaluation
-            prompt=self.review_prompt,
-            response_format=ReviewResult,
-            name="review_agent"
+        # Create the review agent using the dedicated factory function
+        self.review_agent = create_review_agent(
+            model=model,
+            custom_prompt=review_prompt
         )
         
         # Build the workflow graph
@@ -148,3 +192,4 @@ Be constructive in your feedback and specific about what changes are needed.
             "review_status": "pending"
         }
     
+
