@@ -1,0 +1,37 @@
+{
+  "name": "react-agent-with-summarization",
+  "version": "1.0.0",
+  "description": "A React agent that summarizes messages when the message list gets too long (>100,000 tokens)",
+  "main": "agent.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx agent.ts",
+    "build": "tsc",
+    "start": "node dist/agent.js",
+    "example": "tsx example.ts"
+  },
+  "dependencies": {
+    "@langchain/langgraph": "^0.2.19",
+    "@langchain/openai": "^0.3.11",
+    "@langchain/core": "^0.3.15",
+    "uuid": "^10.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "keywords": [
+    "langgraph",
+    "react-agent",
+    "message-summarization",
+    "ai-agent",
+    "typescript",
+    "openai"
+  ],
+  "author": "LangGraph Agent Patterns",
+  "license": "MIT"
+}
+
