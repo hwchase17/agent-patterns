@@ -111,7 +111,7 @@ def collect_section_data(state: FormState) -> FormState:
     current_section = state["current_section"]
     section_config = FORM_SECTIONS[current_section]
     
-    print(f"
+    print(f"\n=== {section_config['name']} ===")
     print("Please provide the following information:")
     
     section_data = {}
@@ -206,7 +206,7 @@ def determine_next_section(state: FormState) -> Command[Literal["collect_section
 
 def finalize_form(state: FormState) -> FormState:
     """Finalize the form and provide a summary."""
-    print("
+    print("\n=== Form Completion Summary ===")
     print(f"Session ID: {state['session_id']}")
     print(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
@@ -214,7 +214,7 @@ def finalize_form(state: FormState) -> FormState:
     for section_name in FORM_SECTIONS.keys():
         if section_name in state:
             section_config = FORM_SECTIONS[section_name]
-            print(f"
+            print(f"\n{section_config['name']}:")
             for field_name, value in state[section_name].items():
                 print(f"  {field_name}: {value}")
     
