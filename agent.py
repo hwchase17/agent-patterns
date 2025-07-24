@@ -111,15 +111,124 @@ class MultiAgentManager:
             
         for agent_name, config in self.remote_agents_config.items():
             try:
-                remote_graph = RemoteGraph(
-                    name=config["graph_name"],
-                    url=self.platform_url,
-                    api_key=self.api_key
-                )
-                self.remote_graphs[agent_name] = remote_graph
+                # Initialize RemoteGraph with both sync and async clients for full functionality
+                if self.client and self.sync_client:
+                    remote_graph = RemoteGraph(
+                        name=config["graph_name"],
+                        client=self.client,
+                        sync_client=self.sync_client,
+                        api_key=self.api_key
+                    )
+                else:
+                    # Fallback to URL-based initialization
+                    remote_graph = RemoteGraph(
+                        name=config["graph_name"],
+                        url=self.platform_url,
+                        api_key=self.api_key
+                    )
+                
+                # Wrap the remote graph with enhanced functionality
+                enhanced_graph = self._create_enhanced_remote_graph(agent_name, remote_graph, config)
+                self.remote_graphs[agent_name] = enhanced_graph
                 print(f"Initialized remote graph for {agent_name}")
+                
             except Exception as e:
                 print(f"Failed to initialize remote graph for {agent_name}: {e}")
+                # Create a fallback placeholder
+                self.remote_graphs[agent_name] = self._create_fallback_remote_graph(agent_name, config)
+    
+    def _create_enhanced_remote_graph(self, agent_name: str, remote_graph: RemoteGraph, config: Dict[str, Any]):
+        """Create an enhanced remote graph wrapper with additional functionality."""
+        
+        def enhanced_remote_node(state: AgentManagementState):
+            """Enhanced remote graph node with proper state management and error handling."""
+            try:
+                # Extract the task information from state
+                messages = state.get("messages", [])
+                run_id = state.get("run_id")
+                priority = state.get("priority", "medium")
+                
+                # Create thread for persistence if we have SDK clients
+                thread_config = None
+                if self.sync_client and run_id:
+                    try:
+                        # Create or get existing thread
+                        thread = self.sync_client.threads.create(
+                            metadata={"agent_name": agent_name, "run_id": run_id, "priority": priority}
+                        )
+                        thread_config = {"configurable": {"thread_id": thread["thread_id"]}}
+                        print(f"Created thread {thread['thread_id']} for {agent_name} run {run_id}")
+                    except Exception as e:
+                        print(f"Failed to create thread for {agent_name}: {e}")
+                
+                # Invoke the remote graph with proper configuration
+                if thread_config:
+                    result = remote_graph.invoke(
+                        {"messages": messages},
+                        config=thread_config
+                    )
+                else:
+                    result = remote_graph.invoke({"messages": messages})
+                
+                # Update state with results
+                updated_state = {
+                    "messages": result.get("messages", []),
+                    "current_operation": f"completed_{agent_name}",
+                }
+                
+                # Add progress update
+                if "progress_updates" not in updated_state:
+                    updated_state["progress_updates"] = state.get("progress_updates", [])
+                
+                updated_state["progress_updates"].append({
+                    "timestamp": datetime.now().isoformat(),
+                    "event": "task_completed",
+                    "agent": agent_name,
+                    "run_id": run_id,
+                    "message": f"Task completed by {agent_name}",
+                    "thread_id": thread_config["configurable"]["thread_id"] if thread_config else None
+                })
+                
+                return updated_state
+                
+            except Exception as e:
+                print(f"Error in enhanced remote node for {agent_name}: {e}")
+                # Return error state
+                return {
+                    "messages": [
+                        AIMessage(content=f"Error executing task on {agent_name}: {str(e)}")
+                    ],
+                    "current_operation": f"error_{agent_name}",
+                    "progress_updates": state.get("progress_updates", []) + [{
+                        "timestamp": datetime.now().isoformat(),
+                        "event": "task_error",
+                        "agent": agent_name,
+                        "run_id": state.get("run_id"),
+                        "message": f"Error in {agent_name}: {str(e)}"
+                    }]
+                }
+        
+        return enhanced_remote_node
+    
+    def _create_fallback_remote_graph(self, agent_name: str, config: Dict[str, Any]):
+        """Create a fallback node when RemoteGraph initialization fails."""
+        def fallback_node(state: AgentManagementState):
+            print(f"Using fallback node for {agent_name}")
+            return {
+                "messages": [
+                    AIMessage(content=f"[Fallback Mode] {agent_name} is not available. "
+                                    f"This would normally handle: {config['description']}")
+                ],
+                "current_operation": f"fallback_{agent_name}",
+                "progress_updates": state.get("progress_updates", []) + [{
+                    "timestamp": datetime.now().isoformat(),
+                    "event": "fallback_used",
+                    "agent": agent_name,
+                    "run_id": state.get("run_id"),
+                    "message": f"Fallback mode activated for {agent_name}"
+                }]
+            }
+        return fallback_node
     
     def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
         """Create a handoff tool for delegating tasks to a specific remote agent."""
@@ -205,4 +314,5 @@ class MultiAgentManager:
         handoff_tools = []
         for agent_name, agent_config in self.remote_agents_config.items():
             tool = self._create_handoff_tool(agent_name, agent_config)
+
 
