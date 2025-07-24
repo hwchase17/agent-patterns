@@ -230,6 +230,90 @@ class MultiAgentManager:
             }
         return fallback_node
     
+    async def _invoke_remote_graph_async(self, agent_name: str, input_data: Dict[str, Any], 
+                                       thread_config: Optional[Dict[str, Any]] = None):
+        """Asynchronously invoke a remote graph."""
+        if agent_name not in self.remote_graphs:
+            raise ValueError(f"Remote graph {agent_name} not found")
+        
+        remote_graph = self.remote_graphs[agent_name]
+        
+        try:
+            if hasattr(remote_graph, 'ainvoke'):
+                if thread_config:
+                    result = await remote_graph.ainvoke(input_data, config=thread_config)
+                else:
+                    result = await remote_graph.ainvoke(input_data)
+            else:
+                # Fallback to sync invoke in thread pool
+                loop = asyncio.get_event_loop()
+                if thread_config:
+                    result = await loop.run_in_executor(
+                        None, lambda: remote_graph.invoke(input_data, config=thread_config)
+                    )
+                else:
+                    result = await loop.run_in_executor(
+                        None, lambda: remote_graph.invoke(input_data)
+                    )
+            return result
+        except Exception as e:
+            print(f"Error invoking remote graph {agent_name}: {e}")
+            raise
+    
+    def _invoke_remote_graph_sync(self, agent_name: str, input_data: Dict[str, Any],
+                                thread_config: Optional[Dict[str, Any]] = None):
+        """Synchronously invoke a remote graph."""
+        if agent_name not in self.remote_graphs:
+            raise ValueError(f"Remote graph {agent_name} not found")
+        
+        remote_graph = self.remote_graphs[agent_name]
+        
+        try:
+            if thread_config:
+                result = remote_graph.invoke(input_data, config=thread_config)
+            else:
+                result = remote_graph.invoke(input_data)
+            return result
+        except Exception as e:
+            print(f"Error invoking remote graph {agent_name}: {e}")
+            raise
+    
+    def get_remote_graph_status(self, agent_name: str) -> Dict[str, Any]:
+        """Get the status of a remote graph connection."""
+        if agent_name not in self.remote_graphs:
+            return {"status": "not_found", "message": f"Agent {agent_name} not configured"}
+        
+        try:
+            # Check if the remote graph is available and properly initialized
+            remote_graph = self.remote_graphs[agent_name]
+            if hasattr(remote_graph, '__call__'):
+                # This is our enhanced wrapper function
+                return {
+                    "status": "connected", 
+                    "message": f"Remote graph {agent_name} is available",
+                    "graph_name": self.remote_agents_config[agent_name]["graph_name"]
+                }
+            else:
+                return {
+                    "status": "fallback",
+                    "message": f"Remote graph {agent_name} is in fallback mode"
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Error checking {agent_name}: {str(e)}"
+            }
+    
+    def list_available_agents(self) -> Dict[str, Dict[str, Any]]:
+        """List all available remote agents and their status."""
+        agents_status = {}
+        for agent_name in self.remote_agents_config.keys():
+            agents_status[agent_name] = {
+                **self.remote_agents_config[agent_name],
+                "connection_status": self.get_remote_graph_status(agent_name)
+            }
+        return agents_status
+    
     def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
         """Create a handoff tool for delegating tasks to a specific remote agent."""
         
@@ -314,5 +398,6 @@ class MultiAgentManager:
         handoff_tools = []
         for agent_name, agent_config in self.remote_agents_config.items():
             tool = self._create_handoff_tool(agent_name, agent_config)
+
 
 
