@@ -48,7 +48,7 @@ def test_forced_first_tool_call():
     ]
     
     for i, test_case in enumerate(test_cases, 1):
-        print(f"
+        print(f"\n{'='*20} TEST CASE {i}: {test_case['name']} {'='*20}")
         print(f"Description: {test_case['description']}")
         print(f"User Input: '{test_case['input']}'")
         print("-" * 60)
@@ -93,7 +93,7 @@ def test_forced_first_tool_call():
             if tool_calls_found:
                 first_tool = tool_calls_found[0]
                 if first_tool == "initialize_session":
-                    print(f"
+                    print(f"\n✅ SUCCESS: First tool called was '{first_tool}' (forced initialization)")
                     if len(tool_calls_found) > 1:
                         print(f"✅ SUCCESS: Subsequent tools called: {tool_calls_found[1:]}")
                         print("✅ SUCCESS: Normal React behavior activated after initialization")
@@ -109,7 +109,7 @@ def test_forced_first_tool_call():
         
         print("-" * 60)
     
-    print(f"
+    print(f"\n{'='*60}")
     print("TEST SUMMARY:")
     print("- All test cases should show 'initialize_session' as the first tool called")
     print("- This demonstrates the forced first tool call behavior")
