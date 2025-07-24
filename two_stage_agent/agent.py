@@ -276,5 +276,3 @@ class TwoStageAgent:
 # Note: For actual usage, you'll need to instantiate with a ReAct agent and model
 app = TwoStageAgent
 
-
-app = TwoStageAgent
