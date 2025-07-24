@@ -1,0 +1,16 @@
+# Core LangGraph and LangChain dependencies
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langchain-anthropic>=0.2.0
+
+# LangGraph SDK for client interactions
+langgraph-sdk>=0.1.0
+
+# Streamlit for the web application
+streamlit>=1.28.0
+
+# Additional utilities
+python-dotenv>=1.0.0
+
