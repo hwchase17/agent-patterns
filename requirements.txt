@@ -1,0 +1,16 @@
+# Core LangGraph and LangChain dependencies
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+
+# LLM Provider - Anthropic (used in the implementation)
+langchain-anthropic>=0.2.0
+
+# Additional LangChain components used in the implementation
+langchain-community>=0.3.0
+
+# Optional: Other popular LLM providers for flexibility
+# Uncomment as needed:
+# langchain-openai>=0.2.0
+# langchain-google-genai>=2.0.0
+
