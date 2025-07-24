@@ -816,6 +816,117 @@ class MultiAgentManager:
         handoff_tools = []
         for agent_name, agent_config in self.remote_agents_config.items():
             tool = self._create_handoff_tool(agent_name, agent_config)
+            handoff_tools.append(tool)
+        
+        # Add thread and run management tools
+        thread_management_tools = self._create_thread_management_tools()
+        all_tools = handoff_tools + thread_management_tools
+        
+        # Create the supervisor agent with all tools
+        supervisor_agent = create_react_agent(
+            model=self.llm,
+            tools=all_tools,
+            prompt=self._get_supervisor_prompt(),
+            name="supervisor"
+        )
+        
+        # Build the state graph
+        graph = StateGraph(AgentManagementState)
+        
+        # Add supervisor node
+        graph.add_node("supervisor", supervisor_agent)
+        
+        # Add remote agent nodes for receiving delegated tasks
+        for agent_name in self.remote_agents_config.keys():
+            # Create remote agent node that handles delegated tasks
+            remote_agent_node = self._create_remote_agent_node(agent_name)
+            graph.add_node(agent_name, remote_agent_node)
+        
+        # Set up edges
+        graph.add_edge(START, "supervisor")
+        
+        # Add conditional edges from supervisor to remote agents
+        # The handoff tools will use Command.goto with Send() to route to specific agents
+        for agent_name in self.remote_agents_config.keys():
+            graph.add_edge(agent_name, "supervisor")  # Remote agents return to supervisor
+        
+        return graph
+    
+    def _create_remote_agent_node(self, agent_name: str):
+        """Create a node for a remote agent that can receive delegated tasks."""
+        
+        def remote_agent_node(state: AgentManagementState) -> AgentManagementState:
+            """Handle delegated tasks for a remote agent."""
+            
+            # Get the remote graph for this agent
+            if agent_name in self.remote_graphs:
+                remote_graph = self.remote_graphs[agent_name]
+                
+                try:
+                    # Extract the task from the state
+                    messages = state.get("messages", [])
+                    if messages:
+                        # Use the remote graph to process the task
+                        result = remote_graph({"messages": messages})
+                        
+                        # Update state with the response
+                        updated_state = state.copy()
+                        if "messages" in result:
+                            updated_state["messages"] = result["messages"]
+                        
+                        # Add progress update
+                        progress_update = {
+                            "timestamp": datetime.now().isoformat(),
+                            "event": "task_completed",
+                            "agent": agent_name,
+                            "message": f"Task completed by {agent_name}",
+                            "details": {"response_received": True}
+                        }
+                        
+                        progress_updates = updated_state.get("progress_updates", [])
+                        progress_updates.append(progress_update)
+                        updated_state["progress_updates"] = progress_updates
+                        
+                        # Update current operation
+                        updated_state["current_operation"] = f"completed_by_{agent_name}"
+                        
+                        return updated_state
+                
+                except Exception as e:
+                    print(f"Error in remote agent {agent_name}: {e}")
+                    # Return error state
+                    error_state = state.copy()
+                    error_message = AIMessage(
+                        content=f"Error processing task with {agent_name}: {str(e)}"
+                    )
+                    error_state["messages"] = state.get("messages", []) + [error_message]
+                    
+                    # Add error progress update
+                    progress_update = {
+                        "timestamp": datetime.now().isoformat(),
+                        "event": "task_error",
+                        "agent": agent_name,
+                        "message": f"Error in {agent_name}: {str(e)}",
+                        "details": {"error": True}
+                    }
+                    
+                    progress_updates = error_state.get("progress_updates", [])
+                    progress_updates.append(progress_update)
+                    error_state["progress_updates"] = progress_updates
+                    
+                    return error_state
+            
+            # Fallback if remote graph not available
+            fallback_state = state.copy()
+            fallback_message = AIMessage(
+                content=f"Remote agent {agent_name} is not available. Task could not be processed."
+            )
+            fallback_state["messages"] = state.get("messages", []) + [fallback_message]
+            
+            return fallback_state
+        
+        return remote_agent_node
+
 
 
 
