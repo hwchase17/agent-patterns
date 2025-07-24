@@ -1430,7 +1430,10 @@ class MultiAgentManager:
         
         # Add cancellation and interrupt tools
         cancellation_interrupt_tools = self._create_cancellation_and_interrupt_tools()
-        all_tools = handoff_tools + thread_management_tools + progress_monitoring_tools + cancellation_interrupt_tools
+        
+        # Add error recovery tools
+        error_recovery_tools = self._create_error_recovery_tools()
+        all_tools = handoff_tools + thread_management_tools + progress_monitoring_tools + cancellation_interrupt_tools + error_recovery_tools
         
         # Create the supervisor agent with all tools
         supervisor_agent = create_react_agent(
