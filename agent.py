@@ -259,7 +259,7 @@ if __name__ == "__main__":
     config = {"configurable": {"thread_id": "demo-thread"}}
     
     # First interaction - should force initialize_session tool
-    print("
+    print("\n🔥 FIRST INTERACTION (Should force initialize_session tool):")
     result1 = app.invoke(
         {"messages": [HumanMessage("Hello, I want to know about the weather in Tokyo")]},
         config=config
@@ -270,12 +270,12 @@ if __name__ == "__main__":
         if hasattr(message, 'content') and message.content:
             print(f"  {i}. {message.__class__.__name__}: {message.content}")
     
-    print(f"
+    print(f"\nInitialization status: {result1.get('initialized', False)}")
     
-    print("
+    print("\n" + "=" * 60)
     
     # Second interaction - should use normal React behavior
-    print("
+    print("\n⚡ SECOND INTERACTION (Should use normal React behavior):")
     result2 = app.invoke(
         {"messages": [HumanMessage("What's the weather in New York?")]},
         config=config
@@ -286,9 +286,9 @@ if __name__ == "__main__":
         if hasattr(message, 'content') and message.content:
             print(f"  {i}. {message.__class__.__name__}: {message.content}")
     
-    print(f"
+    print(f"\nInitialization status: {result2.get('initialized', False)}")
     
-    print("
+    print("\n" + "=" * 60)
     print("✅ Demo completed! The agent successfully:")
     print("   - Forced the first tool call to 'initialize_session'")
     print("   - Switched to normal React behavior for subsequent interactions")
