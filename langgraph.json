@@ -1,0 +1,14 @@
+{
+    "dependencies": [
+        ".",
+        "langgraph",
+        "langchain",
+        "langchain-openai",
+        "streamlit"
+    ],
+    "graphs": {
+        "agent": "./agent/agent.py:graph"
+    },
+    "env": ".env"
+}
+
