@@ -1,4 +1,4 @@
-import { app } from "./agent.js";
+import { app } from "./agent";
 import { HumanMessage } from "@langchain/core/messages";
 import { v4 as uuidv4 } from "uuid";
 
