@@ -270,6 +270,10 @@ class TwoStageAgent:
         iteration_count = state.get("iteration_count", 0)
         max_iterations = state.get("max_iterations", 3)
         
+        # Handle error states - always finish if there's an error
+        if review_status in ["error", "terminated"]:
+            return "finish"
+        
         # If approved, finish the workflow
         if review_status == "approved":
             return "finish"
@@ -281,6 +285,14 @@ class TwoStageAgent:
         # If rejected and under max iterations, continue
         if review_status == "rejected":
             return "continue"
+        
+        # Handle pending status - if we're still pending after first iteration, something went wrong
+        if review_status == "pending" and iteration_count > 0:
+            return "finish"
+        
+        # Handle any unknown status - safe fallback
+        if review_status not in ["pending", "approved", "rejected"]:
+            return "finish"
         
         # Default case (shouldn't happen, but safe fallback)
         return "finish"
@@ -306,5 +318,6 @@ class TwoStageAgent:
 # This allows the agent to be instantiated and run via the local development server
 # Note: For actual usage, you'll need to instantiate with a ReAct agent and model
 app = TwoStageAgent
+
 
 
