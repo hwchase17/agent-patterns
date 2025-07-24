@@ -944,6 +944,174 @@ class MultiAgentManager:
         
         return [get_overall_progress, query_agent_status, search_progress_by_keyword, get_system_health]
     
+    def _create_cancellation_and_interrupt_tools(self):
+        """Create tools for agent cancellation and interrupt handling."""
+        
+        @tool(name="cancel_agent_run", description="Cancel a specific running agent by run ID")
+        def cancel_agent_run(
+            run_id: Annotated[str, "The run ID of the agent to cancel"]
+        ) -> str:
+            """Cancel a specific running agent using RunsClient.cancel()."""
+            try:
+                result = self.cancel_run(run_id)
+                return f"Successfully cancelled run {run_id}. Status: {result['status']}"
+            except Exception as e:
+                return f"Error cancelling run {run_id}: {str(e)}"
+        
+        @tool(name="cancel_all_active_runs", description="Cancel all currently active runs")
+        def cancel_all_active_runs() -> str:
+            """Cancel all currently active runs."""
+            try:
+                active_runs = self.monitor_active_runs()
+                if not active_runs:
+                    return "No active runs to cancel."
+                
+                cancelled_count = 0
+                failed_count = 0
+                results = []
+                
+                for run_id, run_info in active_runs.items():
+                    try:
+                        self.cancel_run(run_id)
+                        cancelled_count += 1
+                        agent_name = run_info.get('agent_name', 'unknown')
+                        results.append(f"✓ Cancelled {run_id[:8]}... ({agent_name})")
+                    except Exception as e:
+                        failed_count += 1
+                        results.append(f"✗ Failed to cancel {run_id[:8]}...: {str(e)}")
+                
+                summary = f"Cancellation Summary: {cancelled_count} successful, {failed_count} failed
+                return summary + "
+                
+            except Exception as e:
+                return f"Error cancelling active runs: {str(e)}"
+        
+        @tool(name="interrupt_agent_for_input", description="Interrupt an agent to request human input")
+        def interrupt_agent_for_input(
+            message: Annotated[str, "Message to display when interrupting for input"],
+            state: Annotated[AgentManagementState, InjectedState] = None
+        ) -> str:
+            """Interrupt the current execution to request human input."""
+            try:
+                # Use LangGraph's interrupt function to pause execution
+                from langgraph.constants import interrupt
+                
+                # Update state with interrupt information
+                if state:
+                    updated_state = state.copy()
+                    
+                    # Add progress update for interrupt
+                    progress_update = {
+                        "timestamp": datetime.now().isoformat(),
+                        "event": "agent_interrupted",
+                        "message": message,
+                        "details": {"awaiting_human_input": True}
+                    }
+                    
+                    progress_updates = updated_state.get("progress_updates", [])
+                    progress_updates.append(progress_update)
+                    updated_state["progress_updates"] = progress_updates
+                    updated_state["current_operation"] = "awaiting_human_input"
+                
+                # Trigger the interrupt
+                interrupt(message)
+                
+                return f"Agent execution interrupted. Message: {message}"
+                
+            except Exception as e:
+                return f"Error interrupting agent: {str(e)}"
+        
+        @tool(name="emergency_stop_all", description="Emergency stop all agents and operations")
+        def emergency_stop_all() -> str:
+            """Emergency stop all agents and operations."""
+            try:
+                results = []
+                
+                # Cancel all active runs
+                active_runs = self.monitor_active_runs()
+                cancelled_runs = 0
+                
+                for run_id in active_runs.keys():
+                    try:
+                        self.cancel_run(run_id)
+                        cancelled_runs += 1
+                    except Exception as e:
+                        results.append(f"Failed to cancel run {run_id[:8]}...: {str(e)}")
+                
+                results.insert(0, f"Emergency stop executed: {cancelled_runs} runs cancelled")
+                
+                # Add system status check
+                try:
+                    remaining_active = self.monitor_active_runs()
+                    if remaining_active:
+                        results.append(f"Warning: {len(remaining_active)} runs still active after emergency stop")
+                    else:
+                        results.append("All runs successfully stopped")
+                except Exception as e:
+                    results.append(f"Could not verify stop status: {str(e)}")
+                
+                return "
+                
+            except Exception as e:
+                return f"Error during emergency stop: {str(e)}"
+        
+        return [cancel_agent_run, cancel_all_active_runs, interrupt_agent_for_input, emergency_stop_all]
+    
+    def interrupt_current_execution(self, message: str = "Execution interrupted for human input"):
+        """Interrupt the current execution using LangGraph's interrupt function."""
+        try:
+            from langgraph.constants import interrupt
+            interrupt(message)
+            print(f"Execution interrupted: {message}")
+        except Exception as e:
+            print(f"Error interrupting execution: {e}")
+            raise
+    
+    def cancel_agent_by_name(self, agent_name: str) -> Dict[str, Any]:
+        """Cancel all runs for a specific agent by name."""
+        if not self.sync_client:
+            raise ValueError("SDK client not initialized. Cannot cancel agent runs.")
+        
+        try:
+            # Get recent runs for this agent
+            recent_runs = self.list_runs(limit=50)
+            agent_runs = [run for run in recent_runs 
+                         if run.get('metadata', {}).get('agent_name') == agent_name
+                         and run['status'] in ['pending', 'running']]
+            
+            if not agent_runs:
+                return {
+                    "agent_name": agent_name,
+                    "cancelled_runs": 0,
+                    "message": f"No active runs found for agent {agent_name}"
+                }
+            
+            cancelled_runs = []
+            failed_cancellations = []
+            
+            for run in agent_runs:
+                try:
+                    self.cancel_run(run['run_id'])
+                    cancelled_runs.append(run['run_id'])
+                except Exception as e:
+                    failed_cancellations.append({
+                        "run_id": run['run_id'],
+                        "error": str(e)
+                    })
+            
+            return {
+                "agent_name": agent_name,
+                "cancelled_runs": len(cancelled_runs),
+                "failed_cancellations": len(failed_cancellations),
+                "cancelled_run_ids": cancelled_runs,
+                "failures": failed_cancellations,
+                "message": f"Cancelled {len(cancelled_runs)} runs for {agent_name}"
+            }
+            
+        except Exception as e:
+            print(f"Error cancelling runs for agent {agent_name}: {e}")
+            raise
+    
     def _create_handoff_tool(self, agent_name: str, agent_config: Dict[str, Any]):
         """Create a handoff tool for delegating tasks to a specific remote agent."""
         
@@ -1141,6 +1309,7 @@ class MultiAgentManager:
             return fallback_state
         
         return remote_agent_node
+
 
 
 
