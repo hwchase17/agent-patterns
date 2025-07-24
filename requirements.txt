@@ -1,0 +1,9 @@
+# Core LangGraph dependencies
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-anthropic>=0.2.0
+
+# Additional packages for form processing and validation
+typing-extensions>=4.5.0
+uuid
+
