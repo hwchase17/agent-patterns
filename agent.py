@@ -1313,11 +1313,28 @@ class MultiAgentManager:
         
         return remote_agent_node
 
+# Create the main app entry point for LangGraph deployment
+def create_app():
+    """Create and return the compiled management agent graph."""
+    # Initialize the MultiAgentManager with default configuration
+    manager = MultiAgentManager()
+    
+    # Build and compile the management graph
+    graph = manager._build_management_graph()
+    
+    # Compile the graph with checkpointing for persistence
+    from langgraph.checkpoint.memory import MemorySaver
+    checkpointer = MemorySaver()
+    
+    app = graph.compile(checkpointer=checkpointer)
+    return app
 
+# Create the app instance for deployment
+app = create_app()
 
-
-
-
-
+# For local development and testing
+if __name__ == "__main__":
+    print("Multi-Agent Management System initialized successfully!")
+    print("Use LangGraph Studio or the LangGraph CLI to interact with the agent.")
 
 
