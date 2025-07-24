@@ -272,5 +272,4 @@ class TwoStageAgent:
 
 
 # Export the TwoStageAgent class for LangGraph Platform compatibility
-# This allows the agent to be instantiated and run via the local development server
-app = TwoStageAgent
+
