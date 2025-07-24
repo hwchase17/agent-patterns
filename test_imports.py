@@ -3,13 +3,41 @@ Test script to verify all application components can be imported without syntax 
 """
 
 import sys
-import traceback
 import py_compile
-import tempfile
-import os
 
-def test_syntax(file_path, description):
-    """Test compiling a Python file to check for syntax errors."""
+def test_syntax_compilation():
+    """Test that all Python files compile without syntax errors."""
+    files_to_test = [
+        ("streamlit_app.py", "Streamlit Application"),
+        ("agent/agent.py", "LangGraph Agent")
+    ]
+    
+    print("Testing Python file compilation for syntax errors...")
+    print("=" * 60)
+    
+    all_passed = True
+    
+    for file_path, description in files_to_test:
+        try:
+            py_compile.compile(file_path, doraise=True)
+            print(f"✅ {description}: No syntax errors")
+        except py_compile.PyCompileError as e:
+            print(f"❌ {description}: Syntax error - {e}")
+            all_passed = False
+    
+    return all_passed
+
+if __name__ == "__main__":
+    success = test_syntax_compilation()
+    
+    print("=" * 60)
+    if success:
+        print("🎉 All files compile successfully! No syntax errors found.")
+        print("Application is ready for import and execution.")
+    else:
+        print("⚠️  Syntax errors found. Please fix the errors above.")
+    
+    sys.exit(0 if success else 1)
     try:
         with tempfile.NamedTemporaryFile(suffix='.pyc', delete=False) as tmp:
             py_compile.compile(file_path, tmp.name, doraise=True)
@@ -69,6 +97,7 @@ def main():
 if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)
+
 
 
 
